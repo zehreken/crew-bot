@@ -16,9 +16,21 @@ struct Rower {
 
 struct Boat {
     std::string name;
-    int seats = 0;
-    std::string level;
+    std::string type;        // rowing shorthand as the Boats tab writes it: "8+"
+    int seats = 0;           // crew size, taken from the type by the exporter
+    int weight_kg = 0;       // crew weight the hull is built for; 0 = unrated
+    std::string boat_class;  // the Class column, empty until the club fills it
 };
+
+// "Bajen  8+  85 kg" - built here rather than at the call sites so the GUI and
+// the self-test describe a boat the same way.
+inline std::string label(const Boat& boat) {
+    std::string out = boat.name;
+    if (!boat.type.empty()) out += "  " + boat.type;
+    if (boat.weight_kg > 0) out += "  " + std::to_string(boat.weight_kg) + " kg";
+    if (!boat.boat_class.empty()) out += "  " + boat.boat_class;
+    return out;
+}
 
 struct Session {
     std::string id;
@@ -40,10 +52,14 @@ struct Assignment {
 
 // Fill the largest boats first with whoever has accepted.
 //
-// Deliberately ignores rower level: the club has not decided how rowers map to
-// experienced/mid/beginner yet (Spond's Grupp 0-4 subgroups may or may not
-// encode it). Boat level is carried through to the output so a coach can see
-// it, but it does not currently constrain who goes in which boat.
+// Deliberately ignores rower level and boat class: the club has not decided
+// what either vocabulary is yet (Spond's Grupp 0-4 subgroups may or may not
+// encode rower skill, and the Boats tab's Class column is empty). Both are
+// carried through to the output so a coach can see them, but neither
+// constrains who goes in which boat.
+//
+// Boats that are damaged or kept at the other lake never reach this function:
+// the exporter drops them.
 //
 // Big boats first because a part-filled eight is a worse outcome than a
 // part-filled double: it strands more people on the dock.

@@ -13,19 +13,16 @@ session. This repo is currently just the Python half.
 
 ```powershell
 python -m venv .venv
-.\.venv\Scripts\pip install -e .
+.\.venv\Scripts\python.exe -m pip install -e .
 ```
 
-**Every command below must use the venv's Python, not the system one.** The system
-Python cannot see this package and will say `No module named crew_bot`.
+That first line is the only one that uses the system Python. **Every command
+below must use the venv's Python**, which is why they all spell out
+`.\.venv\Scripts\python.exe` — the system Python cannot see this package and
+will say `No module named crew_bot`.
 
-Either write the path out each time:
-
-```powershell
-.\.venv\Scripts\python.exe -m crew_bot groups
-```
-
-or activate the venv once per terminal, after which plain `python` is the venv's:
+If you would rather type plain `python`, activate the venv once per terminal
+and it becomes the venv's for that session:
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
@@ -39,9 +36,6 @@ once for your user account:
 Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
 ```
 
-The rest of this README writes `python` as shorthand for **the venv's Python** —
-either activate first, or substitute `.\.venv\Scripts\python.exe`.
-
 ### 2. Spond login
 
 ```powershell
@@ -54,7 +48,7 @@ Edit `.env` and put in the email and password you use for the Spond app.
 Now find your group's exact name:
 
 ```powershell
-python -m crew_bot groups
+.\.venv\Scripts\python.exe -m crew_bot groups
 ```
 
 Paste the group you want into `config.toml` as `group_name`.
@@ -62,7 +56,7 @@ Paste the group you want into `config.toml` as `group_name`.
 Then check which events will be picked up:
 
 ```powershell
-python -m crew_bot titles
+.\.venv\Scripts\python.exe -m crew_bot titles
 ```
 
 This lists every upcoming event and marks with `*` the ones matching
@@ -80,7 +74,7 @@ starts running**, otherwise it will silently never appear.
 You can now verify the whole Spond half, before touching Google at all:
 
 ```powershell
-python -m crew_bot fetch --dry-run
+.\.venv\Scripts\python.exe -m crew_bot fetch --dry-run
 ```
 
 ### 3. Google service account
@@ -111,7 +105,7 @@ Then put the sheet's exact name into `config.toml` as `spreadsheet_name`, and ch
 it works:
 
 ```powershell
-python -m crew_bot check-sheets
+.\.venv\Scripts\python.exe -m crew_bot check-sheets
 ```
 
 This prints the service account address it is using and writes a timestamp into
@@ -120,11 +114,12 @@ cell `A1` of the target tab.
 ## Usage
 
 ```powershell
-python -m crew_bot groups           # list Spond groups your login can see
-python -m crew_bot titles           # list upcoming events, marking which match
-python -m crew_bot fetch --dry-run  # pull and print, write nothing
-python -m crew_bot fetch            # pull and write to the sheet
-python -m crew_bot check-sheets     # verify Google credentials and sharing
+.\.venv\Scripts\python.exe -m crew_bot groups           # list Spond groups your login can see
+.\.venv\Scripts\python.exe -m crew_bot titles           # list upcoming events, marking which match
+.\.venv\Scripts\python.exe -m crew_bot fetch --dry-run  # pull and print, write nothing
+.\.venv\Scripts\python.exe -m crew_bot fetch            # pull and write to the sheet
+.\.venv\Scripts\python.exe -m crew_bot boats            # list the boat inventory
+.\.venv\Scripts\python.exe -m crew_bot check-sheets     # verify Google credentials and sharing
 ```
 
 `fetch` replaces the tab's contents each run, so re-running never duplicates rows.
@@ -134,9 +129,9 @@ python -m crew_bot check-sheets     # verify Google credentials and sharing
 The full loop, run a couple of hours before a session:
 
 ```powershell
-python -m crew_bot export                  # Spond + Boats tab -> data/attendance.json
-.\crew-assign\build\crew-assign.exe        # pick session, Assign, Write crews.json
-python -m crew_bot crews                   # crews.json -> that day's sheet tab
+.\.venv\Scripts\python.exe -m crew_bot export  # Spond + Boats tab -> data/attendance.json
+.\crew-assign\build\crew-assign.exe            # pick session, Assign, Write crews.json
+.\.venv\Scripts\python.exe -m crew_bot crews   # crews.json -> that day's sheet tab
 ```
 
 `export` pulls the current sign-ups and the boat inventory into
@@ -149,21 +144,34 @@ can just run the loop again.
 
 ### The Boats tab
 
-Created automatically with example rows the first time you run
-`python -m crew_bot boats`. Columns:
+The club's boat list. Created automatically with example rows if the tab does
+not exist. Columns, in any order:
 
-| name | seats | level | active | notes |
-|---|---|---|---|---|
-| Ragnar | 8 | experienced | yes | |
+| type | weight | name | producer | class | available | notes |
+|---|---|---|---|---|---|---|
+| 8+ | 85 kg | Bajen | Stämpfli (trä) | | | |
+| 2x/2- | 90 kg | Ricke | Filippi | | no | at the other lake |
 
-- `seats` tolerates boat-style names — `8+` and `4x` both read as a number.
-- `level` must be one of `experienced`, `mid`, `beginner`.
-- `active` — set to `no` to keep a damaged boat in the list without it being
-  assigned. Blank counts as active.
+Only **type** and **name** are required; the rest can be blank or missing
+entirely.
 
-**Note:** boat level is currently carried through for display only. It does not
-yet restrict who is put in which boat, because rower skill level is still
-undecided — see below.
+- `type` is the usual rowing shorthand, and the crew size is read out of it:
+  `8+` → 8, `4x/4-` → 4, `2x/2-` → 2, `C1x` → 1. Only the *first* number counts,
+  so `2x/2-` is a double and not a 22-seater. A cox is not counted as a seat.
+  A type with no number in it (`Trimmer`) needs a line in `TYPE_SEATS` in
+  `boats.py`; anything else unrecognised is an error naming the boat and row,
+  rather than a boat silently missing from the session.
+- `weight` is the crew weight the hull is built for, in kg. `0` or blank means
+  unrated — that is kept distinct from a light boat, not turned into 0.
+- `available` — set to `no` for a boat that is damaged or kept at the other
+  lake. It stays in the inventory and in the `boats` listing, but is
+  never exported and so can never be assigned. **Blank counts as available**,
+  so only the exceptions need filling in. Put the reason in `notes`.
+- `class` is free text and empty for now — see the note below.
+
+**Note:** `class` is carried through for display only. It does not yet restrict
+who is put in which boat, because neither the class vocabulary nor rower skill
+level is decided — see below.
 
 ### Crew assignment, as it currently works
 
@@ -172,10 +180,17 @@ that cannot be completely filled is skipped rather than launched short. So 9
 rowers with an eight and a four available gives one full eight and one person
 left over.
 
-Rower skill level is **not** considered yet. `Rower.level` exists in the data
-model and ships as `null` in the JSON, so adding it later is not a schema
-change. Spond has `Grupp 0`–`Grupp 4` subgroups that may encode it — that
-decision is still open.
+Boats marked unavailable are dropped by `export`, so the C++ side never sees
+them.
+
+Neither rower skill level nor boat class is considered yet. `Rower.level` and
+`Boat.boat_class` both exist in the data model and ship as `null` in the JSON,
+so filling them in later does not change the shape of anything. Spond has
+`Grupp 0`–`Grupp 4` subgroups that may encode rower level — that decision, and
+what goes in the sheet's Class column, are both still open.
+
+Boat weight is exported but not used either. Matching a crew's weight to the
+hull's rating is the obvious next step once the Class column means something.
 
 ## Sheet format
 
@@ -222,8 +237,8 @@ share no code, only that file.
 ## Tests
 
 ```powershell
-python tests\test_transforms.py                  # Python side
-.\crew-assign\build\selftest.exe                 # C++ side
+.\.venv\Scripts\python.exe tests\test_transforms.py  # Python side
+.\crew-assign\build\selftest.exe                     # C++ side
 ```
 
 The C++ self-test covers crew assignment against both synthetic cases and your

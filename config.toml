@@ -32,8 +32,8 @@ spreadsheet_name = "crew-bot"
 # The tab within that sheet. Created automatically if it does not exist.
 worksheet_name = "Attendance"
 
-# The tab holding the boat inventory: name, seats, level, active.
-# Created with example rows if it does not exist.
+# The tab holding the boat inventory: type, weight, name, producer, class,
+# available, notes. Created with example rows if it does not exist.
 boats_worksheet_name = "Boats"
 
 [export]

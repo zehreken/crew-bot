@@ -118,8 +118,8 @@ def _cmd_export(config, out: str | None) -> int:
     payload = export.build_payload(snapshot, boat_list)
     export.write_json(payload, path)
 
-    active = sum(1 for b in boat_list if b.active)
-    print(f"\nBoats: {active} active of {len(boat_list)}")
+    available = sum(1 for b in boat_list if b.available)
+    print(f"\nBoats: {available} available of {len(boat_list)}")
     print(f"Wrote {path}")
     print("The C++ crew app reads this file.")
     return 0
@@ -141,10 +141,16 @@ def _cmd_boats(config) -> int:
     require_sheets(config)
     client = sheets.get_client(config)
     boat_list = boats.load_boats(config, client)
-    print(f"{len(boat_list)} boats in the {config.boats_worksheet_name!r} tab:\n")
+    available = sum(1 for b in boat_list if b.available)
+    print(
+        f"{len(boat_list)} boats in the {config.boats_worksheet_name!r} tab, "
+        f"{available} available:\n"
+    )
     for boat in sorted(boat_list, key=lambda b: (-b.seats, b.name)):
-        flag = "" if boat.active else "   (inactive)"
-        print(f"  {boat.seats:2} seats  {boat.level:<12} {boat.name}{flag}")
+        weight = f"{boat.weight_kg} kg" if boat.weight_kg else "-"
+        seats = f"{boat.seats} seat" + ("s" if boat.seats != 1 else "")
+        flag = "" if boat.available else "   (not available)"
+        print(f"  {boat.type:<8} {seats:<8} {weight:>6}  {boat.name}{flag}")
     return 0
 
 

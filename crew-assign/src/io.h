@@ -39,8 +39,16 @@ inline Attendance load_attendance(const std::string& path) {
     for (const auto& b : doc.value("boats", nlohmann::json::array())) {
         crews::Boat boat;
         boat.name = b.value("name", "");
+        boat.type = b.value("type", "");
         boat.seats = b.value("seats", 0);
-        boat.level = b.value("level", "");
+        // weight_kg and class are null for hulls the club does not rate and
+        // until the Class column is filled in; value() would throw on null.
+        if (b.contains("weight_kg") && !b["weight_kg"].is_null()) {
+            boat.weight_kg = b["weight_kg"].get<int>();
+        }
+        if (b.contains("class") && !b["class"].is_null()) {
+            boat.boat_class = b["class"].get<std::string>();
+        }
         out.boats.push_back(boat);
     }
 
@@ -69,7 +77,6 @@ inline nlohmann::json crews_payload(const crews::Session& session,
                                     const crews::Assignment& assignment,
                                     const std::string& generated_at) {
     nlohmann::json doc;
-    doc["schema"] = 1;
     doc["generated_at"] = generated_at;
     doc["session"] = {{"id", session.id},
                       {"date", session.date},
@@ -83,8 +90,10 @@ inline nlohmann::json crews_payload(const crews::Session& session,
             rowers.push_back({{"id", r.id}, {"name", r.name}});
         }
         doc["crews"].push_back({{"boat", crew.boat.name},
+                                {"type", crew.boat.type},
                                 {"seats", crew.boat.seats},
-                                {"level", crew.boat.level},
+                                {"weight_kg", crew.boat.weight_kg},
+                                {"class", crew.boat.boat_class},
                                 {"rowers", rowers}});
     }
 

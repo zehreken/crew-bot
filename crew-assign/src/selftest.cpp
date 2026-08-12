@@ -28,8 +28,9 @@ int main(int argc, char** argv) {
         for (int i = 0; i < 13; ++i) {
             s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
         }
-        std::vector<crews::Boat> boats = {
-            {"Four", 4, "mid"}, {"Eight", 8, "experienced"}, {"Double", 2, "beginner"}};
+        std::vector<crews::Boat> boats = {{"Four", "4x/4-", 4, 75, ""},
+                                          {"Eight", "8+", 8, 85, ""},
+                                          {"Double", "2x", 2, 70, ""}};
 
         crews::Assignment a = crews::assign(s, boats);
 
@@ -55,8 +56,8 @@ int main(int argc, char** argv) {
     {
         crews::Session s;
         s.accepted = {{"1", "A", ""}, {"2", "B", ""}, {"3", "C", ""}};
-        std::vector<crews::Boat> boats = {{"Eight", 8, "experienced"},
-                                          {"Double", 2, "beginner"}};
+        std::vector<crews::Boat> boats = {{"Eight", "8+", 8, 85, ""},
+                                          {"Double", "2x", 2, 70, ""}};
         crews::Assignment a = crews::assign(s, boats);
         check(a.crews.size() == 1 && a.crews[0].boat.name == "Double",
               "an eight is skipped when only 3 rowers turned up");
@@ -66,7 +67,7 @@ int main(int argc, char** argv) {
     // --- no rowers at all --------------------------------------------------
     {
         crews::Session s;
-        std::vector<crews::Boat> boats = {{"Double", 2, "beginner"}};
+        std::vector<crews::Boat> boats = {{"Double", "2x", 2, 70, ""}};
         crews::Assignment a = crews::assign(s, boats);
         check(a.crews.empty() && a.unassigned.empty(), "empty session is safe");
     }
@@ -93,8 +94,8 @@ int main(int argc, char** argv) {
         crews::Assignment a = crews::assign(session, att.boats);
         std::printf("\n");
         for (const auto& c : a.crews) {
-            std::printf("  %s (%d seats, %s)\n", c.boat.name.c_str(),
-                        c.boat.seats, c.boat.level.c_str());
+            std::printf("  %s (%d seats)\n", crews::label(c.boat).c_str(),
+                        c.boat.seats);
             int seat = 1;
             for (const auto& r : c.rowers)
                 std::printf("    %d. %s\n", seat++, r.name.c_str());

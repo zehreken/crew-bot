@@ -1,13 +1,13 @@
 """The JSON contract between the Python half and the C++ crew assigner.
 
-Shape (schema 1):
+Shape:
 
     {
-      "schema": 1,
       "generated_at": "2026-08-12T22:30:00+02:00",
       "group": "Hammarby Rodd",
       "boats": [
-        {"name": "Ragnar", "seats": 8, "level": "experienced"}
+        {"name": "Bajen", "type": "8+", "seats": 8, "weight_kg": 85,
+         "class": null}
       ],
       "sessions": [
         {
@@ -29,8 +29,17 @@ Times are local, because everything downstream is read by humans in Stockholm.
 `date` is pre-computed because it names the sheet tab the crews get written to,
 and deriving it from a timestamp is one more thing for C++ to get wrong.
 
-`level` is null on every rower for now: where skill level comes from is still
-undecided. The key is present so adding it later is not a schema change.
+Rower `level` is null for now: where skill level comes from is still undecided.
+The key is present so filling it in later touches neither side's parsing. Boat
+`class` is null for the same reason - the Class column of the Boats tab is not
+filled in yet - and `weight_kg` is null for the hulls the club does not rate.
+
+Only boats marked available are exported: a damaged boat, or one kept at the
+other lake, stays in the inventory but must never be assigned at an open
+session, and filtering here means the solver cannot accidentally pick one.
+
+Both halves of this file are written and read in the same repo, so the format
+is not versioned: if it changes, change both sides and re-export.
 """
 
 import json
@@ -39,18 +48,21 @@ from pathlib import Path
 
 from .models import ACCEPTED, DECLINED, UNANSWERED, Boat, Snapshot
 
-SCHEMA_VERSION = 1
-
 
 def build_payload(snapshot: Snapshot, boats: list[Boat]) -> dict:
     return {
-        "schema": SCHEMA_VERSION,
         "generated_at": snapshot.fetched_at.astimezone().isoformat(),
         "group": snapshot.group_name,
         "boats": [
-            {"name": b.name, "seats": b.seats, "level": b.level}
+            {
+                "name": b.name,
+                "type": b.type,
+                "seats": b.seats,
+                "weight_kg": b.weight_kg,
+                "class": b.boat_class,
+            }
             for b in boats
-            if b.active
+            if b.available
         ],
         "sessions": [
             {

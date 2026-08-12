@@ -184,8 +184,8 @@ static void draw_ui(AppState& s) {
             ImGui::TextDisabled("Press Assign crews.");
         } else {
             for (const auto& crew : s.assignment.crews) {
-                ImGui::Text("%s  (%d seats, %s)", crew.boat.name.c_str(),
-                            crew.boat.seats, crew.boat.level.c_str());
+                ImGui::Text("%s  (%d seats)", crews::label(crew.boat).c_str(),
+                            crew.boat.seats);
                 ImGui::Indent();
                 int seat = 1;
                 for (const auto& r : crew.rowers) {

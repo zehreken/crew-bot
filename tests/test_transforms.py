@@ -1,14 +1,15 @@
 """Tests for the pure transformation logic - no network, no credentials.
 
-These cover the two places a wrong answer would be silent rather than loud:
-the open training title filter, and the response-list flattening.
+These cover the places a wrong answer would be silent rather than loud: the
+open training title filter, the response-list flattening, and reading the
+Boats tab (where a misparsed type would launch the wrong sized crew).
 
 Run with `pytest`, or directly with `python tests/test_transforms.py`.
 """
 
 from datetime import datetime, timedelta, timezone
 
-from crew_bot import sheets
+from crew_bot import boats, export, sheets
 from crew_bot.models import ACCEPTED, DECLINED, UNANSWERED, Snapshot
 from crew_bot.config import _as_titles
 from crew_bot.spond_client import (
@@ -151,6 +152,107 @@ def test_sheet_rows_are_rectangular_and_sorted():
     assert all(len(row) == len(sheets.HEADER) for row in rows)
     names = [row[5] for row in rows[1:]]
     assert names == sorted(names)
+
+
+# --- the Boats tab ---------------------------------------------------------
+# Real rows from the club's inventory, headers in the club's own order.
+BOAT_ROWS = [
+    ["Type", "Weight", "Name", "Producer", "Class", "Available", "Notes"],
+    ["8+", "85 kg", "Bajen", "Stampfli", "", "", ""],
+    ["4x/4-", "75 kg", "Kaza", "Filippi", "", "yes", ""],
+    ["2x/2-", "90 kg", "Ricke", "Filippi", "", "no", "at the other lake"],
+    ["1x", "55 kg", "Rio", "Wintech", "", "", ""],
+    ["Trimmer", "0", "Cecil", "Hasle", "", "", ""],
+    ["", "", "", "", "", "", ""],
+]
+
+
+def test_seats_come_from_the_type_not_from_every_digit_in_it():
+    # "2x/2-" is a double. Concatenating its digits would make it a 22.
+    assert boats.seats_for_type("2x/2-") == 2
+    assert boats.seats_for_type("4x/4-") == 4
+    assert boats.seats_for_type("8+") == 8
+    assert boats.seats_for_type("4++") == 4
+    assert boats.seats_for_type("C1x") == 1
+    assert boats.seats_for_type("1x") == 1
+
+
+def test_named_types_without_a_number_are_known():
+    assert boats.seats_for_type("Trimmer") == 1
+    assert boats.seats_for_type("  trimmer ") == 1
+    assert boats.seats_for_type("skiff") is None
+
+
+def test_boat_rows_parse_into_the_model():
+    parsed = boats.parse_rows(BOAT_ROWS)
+    assert [b.name for b in parsed] == ["Bajen", "Kaza", "Ricke", "Rio", "Cecil"]
+
+    bajen = parsed[0]
+    assert (bajen.type, bajen.seats, bajen.weight_kg) == ("8+", 8, 85)
+    assert bajen.producer == "Stampfli"
+    # The Class column is empty for now; blank must not become the string "".
+    assert bajen.boat_class is None
+
+
+def test_columns_may_be_renamed_in_case_and_moved_around():
+    # Coaches reorder and re-capitalise columns; nothing here may depend on
+    # where a column sits or how it is spelt.
+    order = [2, 0, 5, 1, 4, 6, 3]  # name, type, available, weight, ...
+    shuffled = [[row[i] for i in order] for row in BOAT_ROWS]
+    shuffled[0] = [h.upper() for h in shuffled[0]]
+
+    assert boats.parse_rows(shuffled) == boats.parse_rows(BOAT_ROWS)
+
+
+def test_unrated_hulls_have_no_weight_rather_than_zero():
+    cecil = boats.parse_rows(BOAT_ROWS)[4]
+    assert cecil.weight_kg is None
+
+
+def test_availability_defaults_to_yes_and_no_means_no():
+    parsed = {b.name: b.available for b in boats.parse_rows(BOAT_ROWS)}
+    assert parsed["Bajen"] is True  # blank counts as available
+    assert parsed["Kaza"] is True
+    assert parsed["Ricke"] is False  # kept at the other lake
+
+
+def test_a_tab_without_an_available_column_is_all_available():
+    rows = [row[:5] + row[6:] for row in BOAT_ROWS]
+    assert all(b.available for b in boats.parse_rows(rows))
+
+
+def test_unknown_type_is_an_error_naming_the_boat_and_row():
+    rows = [BOAT_ROWS[0], ["skiff", "70 kg", "Nemo", "", "", "", ""]]
+    message = ""
+    try:
+        boats.parse_rows(rows)
+    except boats.BoatsError as exc:
+        message = str(exc)
+    assert "Nemo" in message and "skiff" in message and "row 2" in message
+
+
+def test_missing_required_column_is_an_error():
+    rows = [["Weight", "Name"], ["85 kg", "Bajen"]]
+    message = ""
+    try:
+        boats.parse_rows(rows)
+    except boats.BoatsError as exc:
+        message = str(exc)
+    assert "type" in message
+
+
+def test_unavailable_boats_are_never_exported():
+    payload = export.build_payload(_snapshot(), boats.parse_rows(BOAT_ROWS))
+    names = [b["name"] for b in payload["boats"]]
+    assert "Ricke" not in names  # damaged or at the other lake
+    assert names == ["Bajen", "Kaza", "Rio", "Cecil"]
+    assert payload["boats"][0] == {
+        "name": "Bajen",
+        "type": "8+",
+        "seats": 8,
+        "weight_kg": 85,
+        "class": None,
+    }
 
 
 def _snapshot() -> Snapshot:

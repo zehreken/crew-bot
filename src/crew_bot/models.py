@@ -16,21 +16,35 @@ UNCONFIRMED = "unconfirmed"
 WAITINGLIST = "waitinglist"
 
 
-# What a boat requires of its crew. Which rowers count as what is still an open
-# question - Spond has Grupp 0-4 subgroups that may or may not encode it - so
-# `Rower.level` stays None for now and crew assignment ignores it.
-EXPERIENCED = "experienced"
-MID = "mid"
-BEGINNER = "beginner"
-LEVELS = (EXPERIENCED, MID, BEGINNER)
-
-
 @dataclass(frozen=True)
 class Boat:
+    """One hull from the club's inventory, as the Boats tab describes it.
+
+    `type` is the rowing shorthand the tab is written in - "1x", "2x/2-",
+    "4++", "8+", and a few named oddities like "Trimmer". `seats` is derived
+    from it so the rest of the code never has to parse boat names.
+
+    `weight_kg` is the crew weight the hull is built for, not the weight of the
+    boat. None means the tab does not rate it (the trimmers and the coxed
+    tubs), which is different from a light boat and must not be treated as 0.
+
+    `boat_class` is the Class column: free text, empty everywhere for now.
+    What goes in it - and which rowers may take which class - is undecided,
+    so nothing downstream acts on it yet. Spelt with the prefix because
+    `class` is a keyword.
+
+    `available` is what the crew assigner honours: a damaged boat, or one
+    kept at the other lake, stays in the inventory but is never assigned at an
+    open session. Why it is unavailable belongs in the tab's Notes column.
+    """
+
     name: str
+    type: str
     seats: int
-    level: str
-    active: bool = True
+    weight_kg: int | None = None
+    boat_class: str | None = None
+    producer: str = ""
+    available: bool = True
 
 
 @dataclass(frozen=True)

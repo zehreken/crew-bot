@@ -105,7 +105,9 @@ def crews_to_rows(payload: dict) -> list[list[str]]:
         boat = crew.get("boat", "?")
         seats = crew.get("seats", "")
         rowers = crew.get("rowers", [])
-        rows.append([f"{boat}  ({len(rowers)}/{seats} seats)", crew.get("level", "")])
+        rows.append(
+            [f"{boat}  ({len(rowers)}/{seats} seats)", crew.get("type", "")]
+        )
         for position, rower in enumerate(rowers, start=1):
             name = rower.get("name", "") if isinstance(rower, dict) else str(rower)
             rows.append([f"  {position}. {name}", ""])
