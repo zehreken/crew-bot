@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "crew-bot"
+version = "0.1.0"
+description = "Pull open training attendance from Spond into a Google Sheet."
+requires-python = ">=3.11"
+dependencies = [
+    "spond",
+    "gspread",
+    "google-auth",
+    "python-dotenv",
+]
+
+[project.scripts]
+crew-bot = "crew_bot.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

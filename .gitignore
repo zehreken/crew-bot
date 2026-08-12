@@ -1,0 +1,22 @@
+# Secrets - never commit these
+.env
+secrets/
+
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Generated data - re-created by `crew_bot export` and the crew app
+data/
+
+# C++ build output and vendored dependencies.
+# vendor/imgui is a git clone with its own .git; build.bat tells you how to
+# fetch both if they are missing.
+crew-assign/build/
+crew-assign/vendor/
+
+# Editors
+.vscode/
+.idea/

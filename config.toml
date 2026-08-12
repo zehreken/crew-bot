@@ -1,0 +1,41 @@
+# Non-secret settings. Safe to commit and share with other coaches.
+# Secrets (Spond login, Google key path) live in .env - see .env.example.
+
+[spond]
+# The Spond group to pull from, as it is named in the app.
+# Run `python -m crew_bot groups` to list the groups your login can see.
+group_name = "Hammarby Rodd"
+
+# Only events whose title contains one of these is pulled. An event matches if
+# ANY entry matches. Matching is case-insensitive and ignores extra whitespace.
+#
+# Deliberately an explicit list rather than a loose "rowing" match: that would
+# also pull in anything else with "rowing" in the title. Add a line here when a
+# new open session starts running.
+event_title_matches = [
+    "monday rowing",
+    "thursday rowing",
+    "saturday rowing",
+]
+
+# How many days ahead to look for sessions.
+lookahead_days = 14
+
+# Safety cap on how many events to request from Spond in one go.
+max_events = 100
+
+[sheets]
+# The Google Sheet to write to, by its exact name.
+# It must be shared with the service account email - see README.md.
+spreadsheet_name = "crew-bot"
+
+# The tab within that sheet. Created automatically if it does not exist.
+worksheet_name = "Attendance"
+
+# The tab holding the boat inventory: name, seats, level, active.
+# Created with example rows if it does not exist.
+boats_worksheet_name = "Boats"
+
+[export]
+# Where `crew_bot export` writes the JSON the C++ crew app reads.
+path = "data/attendance.json"
