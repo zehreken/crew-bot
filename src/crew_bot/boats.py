@@ -5,14 +5,15 @@ The sheet is the source of truth: coaches already work there, and boats change
 
 The tab is the club's existing boat list, so this reads its vocabulary rather
 than imposing one: a `type` column in rowing shorthand ("1x", "2x/2-", "8+")
-with the seat count inside it, and a crew `weight` in kg.
+with the seat count inside it, a crew `weight` in kg, and a `class` from the
+club's C/B/A/AA scale (see BOAT_CLASSES in models.py).
 """
 
 import gspread
 from gspread.exceptions import WorksheetNotFound
 
 from .config import Config
-from .models import Boat
+from .models import BOAT_CLASSES, Boat, normalise_class
 
 # Matches the club's own boat list, so a tab this code creates and the real one
 # look the same. Reading is case-insensitive and order-independent, so neither
@@ -21,9 +22,9 @@ BOATS_HEADER = ["Type", "Weight", "Name", "Producer", "Class", "Available", "Not
 
 # Written into a freshly created tab so the format is self-explanatory.
 EXAMPLE_ROWS = [
-    ["8+", "85 kg", "Example eight", "Stampfli", "", "yes", "delete this row"],
-    ["4x/4-", "75 kg", "Example four", "Filippi", "", "yes", "delete this row"],
-    ["1x", "70 kg", "Example single", "Wintech", "", "no", "delete this row"],
+    ["8+", "85 kg", "Example eight", "Stampfli", "B", "yes", "delete this row"],
+    ["4x/4-", "75 kg", "Example four", "Filippi", "A", "yes", "delete this row"],
+    ["1x", "70 kg", "Example single", "Wintech", "AA", "no", "delete this row"],
 ]
 
 # Only `name` and `type` have to be there; everything else is optional and
@@ -142,13 +143,26 @@ def parse_rows(rows: list[list[str]], source: str = "Boats") -> list[Boat]:
         # is not the same as a boat for a 0 kg crew.
         weight_kg = _leading_number(cell("weight")) or None
 
+        # Blank is a boat nobody has classed yet, which is fine. A non-blank
+        # cell that is not one of the four classes is a typo, and letting it
+        # through would put a boat in a class that silently matches no rower.
+        raw_class = cell("class")
+        boat_class = normalise_class(raw_class)
+        if raw_class and boat_class is None:
+            raise BoatsError(
+                f"{source} row {number}: boat {name!r} has class={raw_class!r}, "
+                f"which is not one of {', '.join(BOAT_CLASSES)} (lowest to "
+                f"highest). Fix the cell, or leave it blank if the boat has "
+                f"not been classed yet."
+            )
+
         boats.append(
             Boat(
                 name=name,
                 type=boat_type.strip(),
                 seats=seats,
                 weight_kg=weight_kg,
-                boat_class=cell("class") or None,
+                boat_class=boat_class,
                 producer=cell("producer"),
                 available=_available(cell("available")),
             )

@@ -15,6 +15,40 @@ UNANSWERED = "unanswered"
 UNCONFIRMED = "unconfirmed"
 WAITINGLIST = "waitinglist"
 
+# The club's boat classes, as the Class column of the Boats tab writes them,
+# lowest first: C is the stable trainer, AA the racing shell.
+#
+# The order is the point. Once rower skill is known, "may this crew take this
+# boat" is a comparison rather than a table of special cases, and the ordering
+# lives here only - `class_rank` is what the export ships so neither the sheet
+# nor the C++ side has to know the letters.
+BOAT_CLASSES = ("C", "B", "A", "AA")
+
+
+def normalise_class(value: str) -> str | None:
+    """Tidy a Class cell into one of BOAT_CLASSES, or None if it is not one.
+
+    Case and surrounding whitespace are noise a coach should not have to think
+    about; anything else is a typo the caller should complain about loudly
+    rather than quietly drop.
+    """
+    candidate = value.strip().upper()
+    return candidate if candidate in BOAT_CLASSES else None
+
+
+def class_rank(boat_class: str | None) -> int | None:
+    """1-based position in BOAT_CLASSES: C -> 1, B -> 2, A -> 3, AA -> 4.
+
+    1-based so that 0 is free to mean "unclassed" on the JSON and C++ side,
+    where an absent value is a plain int rather than a None.
+    """
+    if boat_class is None:
+        return None
+    try:
+        return BOAT_CLASSES.index(boat_class) + 1
+    except ValueError:
+        return None
+
 
 @dataclass(frozen=True)
 class Boat:
@@ -28,9 +62,11 @@ class Boat:
     boat. None means the tab does not rate it (the trimmers and the coxed
     tubs), which is different from a light boat and must not be treated as 0.
 
-    `boat_class` is the Class column: free text, empty everywhere for now.
-    What goes in it - and which rowers may take which class - is undecided,
-    so nothing downstream acts on it yet. Spelt with the prefix because
+    `boat_class` is the Class column: one of BOAT_CLASSES ("C" to "AA", how
+    demanding the hull is), or None for a boat the tab has not classed yet.
+    Which rowers may take which class is still undecided, so it constrains
+    nothing yet - but it is a closed vocabulary rather than free text, so a
+    typo in the sheet is caught at read time. Spelt with the prefix because
     `class` is a keyword.
 
     `available` is what the crew assigner honours: a damaged boat, or one
@@ -45,6 +81,11 @@ class Boat:
     boat_class: str | None = None
     producer: str = ""
     available: bool = True
+
+    @property
+    def class_rank(self) -> int | None:
+        """Where this boat's class sits in BOAT_CLASSES; None if unclassed."""
+        return class_rank(self.boat_class)
 
 
 @dataclass(frozen=True)

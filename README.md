@@ -151,8 +151,8 @@ not exist. Columns, in any order:
 
 | type | weight | name | producer | class | available | notes |
 |---|---|---|---|---|---|---|
-| 8+ | 85 kg | Bajen | Stämpfli (trä) | | | |
-| 2x/2- | 90 kg | Ricke | Filippi | | no | at the other lake |
+| 8+ | 85 kg | Bajen | Stämpfli (trä) | B | | |
+| 2x/2- | 90 kg | Ricke | Filippi | AA | no | at the other lake |
 
 Only **type** and **name** are required; the rest can be blank or missing
 entirely.
@@ -169,11 +169,17 @@ entirely.
   lake. It stays in the inventory and in the `boats` listing, but is
   never exported and so can never be assigned. **Blank counts as available**,
   so only the exceptions need filling in. Put the reason in `notes`.
-- `class` is free text and empty for now — see the note below.
+- `class` is how demanding the hull is, on the club's scale: **C, B, A, AA**,
+  lowest to highest. Case and stray spaces do not matter (`aa` is `AA`), but
+  anything that is not one of the four is an error naming the boat and row —
+  a typo would otherwise put a boat in a class nothing can ever match. Blank
+  is fine and means the boat has not been classed yet; `boats` prints those
+  as `-` and counts them, so it is easy to see what is left to fill in.
 
-**Note:** `class` is carried through for display only. It does not yet restrict
-who is put in which boat, because neither the class vocabulary nor rower skill
-level is decided — see below.
+**Note:** `class` is read, validated and carried all the way through to the
+C++ app and the day's sheet tab, but it does not yet restrict who is put in
+which boat — that needs a skill level per rower, which the club does not have
+anywhere yet. See below.
 
 ### Crew assignment, as it currently works
 
@@ -185,11 +191,14 @@ left over.
 Boats marked unavailable are dropped by `export`, so the C++ side never sees
 them.
 
-Neither rower skill level nor boat class is considered yet. `Rower.level` and
-`Boat.boat_class` both exist in the data model and ship as `null` in the JSON,
-so filling them in later does not change the shape of anything. Spond has
-`Grupp 0`–`Grupp 4` subgroups that may encode rower level — that decision, and
-what goes in the sheet's Class column, are both still open.
+Neither rower skill level nor boat class is considered yet. The boat half is
+now real: each hull carries its class from the Boats tab, and the export ships
+a `class_rank` (C=1 … AA=4) so the C++ side can compare classes without a
+second copy of the letters. What is still missing is the *rower* half — there
+is nothing to compare a class against until a rower has a level. `Rower.level`
+exists in the data model and ships as `null`, so filling it in later does not
+change the shape of anything. Spond has `Grupp 0`–`Grupp 4` subgroups that may
+encode rower level — that decision is still open.
 
 Run `subgroups` to see them. Every member carries the subgroups they belong to,
 and rowers are commonly in more than one (the per-subgroup counts add up to well
@@ -213,8 +222,9 @@ Checked against the live group, because it shapes what the assigner can ever do:
   exist. The group defines one, `Oarside`, filled in for 1 of 160 members. The
   `members` command prints any that are set, in brackets after the subgroups.
 
-Boat weight is exported but not used either. Matching a crew's weight to the
-hull's rating is the obvious next step once the Class column means something.
+Boat weight is exported but not used either. With the Class column now filled
+in, the two obvious next steps are a level per rower (so class can gate who
+takes which boat) and matching a crew's weight to the hull's rating.
 
 ## Sheet format
 

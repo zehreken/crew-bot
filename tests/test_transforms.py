@@ -9,7 +9,7 @@ Run with `pytest`, or directly with `python tests/test_transforms.py`.
 
 from datetime import datetime, timedelta, timezone
 
-from crew_bot import boats, export, sheets
+from crew_bot import boats, export, models, sheets
 from crew_bot.models import ACCEPTED, DECLINED, UNANSWERED, Snapshot
 from crew_bot.config import _as_titles
 from crew_bot.spond_client import (
@@ -158,10 +158,10 @@ def test_sheet_rows_are_rectangular_and_sorted():
 # Real rows from the club's inventory, headers in the club's own order.
 BOAT_ROWS = [
     ["Type", "Weight", "Name", "Producer", "Class", "Available", "Notes"],
-    ["8+", "85 kg", "Bajen", "Stampfli", "", "", ""],
-    ["4x/4-", "75 kg", "Kaza", "Filippi", "", "yes", ""],
-    ["2x/2-", "90 kg", "Ricke", "Filippi", "", "no", "at the other lake"],
-    ["1x", "55 kg", "Rio", "Wintech", "", "", ""],
+    ["8+", "85 kg", "Bajen", "Stampfli", "B", "", ""],
+    ["4x/4-", "75 kg", "Kaza", "Filippi", "A", "yes", ""],
+    ["2x/2-", "90 kg", "Ricke", "Filippi", "AA", "no", "at the other lake"],
+    ["1x", "55 kg", "Rio", "Wintech", " aa ", "", ""],
     ["Trimmer", "0", "Cecil", "Hasle", "", "", ""],
     ["", "", "", "", "", "", ""],
 ]
@@ -190,8 +190,7 @@ def test_boat_rows_parse_into_the_model():
     bajen = parsed[0]
     assert (bajen.type, bajen.seats, bajen.weight_kg) == ("8+", 8, 85)
     assert bajen.producer == "Stampfli"
-    # The Class column is empty for now; blank must not become the string "".
-    assert bajen.boat_class is None
+    assert bajen.boat_class == "B"
 
 
 def test_columns_may_be_renamed_in_case_and_moved_around():
@@ -219,6 +218,41 @@ def test_availability_defaults_to_yes_and_no_means_no():
 def test_a_tab_without_an_available_column_is_all_available():
     rows = [row[:5] + row[6:] for row in BOAT_ROWS]
     assert all(b.available for b in boats.parse_rows(rows))
+
+
+def test_boat_class_reads_the_clubs_scale_and_tolerates_casing():
+    parsed = {b.name: b.boat_class for b in boats.parse_rows(BOAT_ROWS)}
+    assert parsed["Bajen"] == "B"
+    assert parsed["Ricke"] == "AA"
+    # A coach typing " aa " means AA; only the letters are load-bearing.
+    assert parsed["Rio"] == "AA"
+    # An unclassed boat is blank, and blank must not become the string "".
+    assert parsed["Cecil"] is None
+
+
+def test_boat_classes_rank_from_c_up_to_aa():
+    # The order is what a skill rule will eventually compare, so it is worth
+    # pinning: getting it upside down would put beginners in racing shells.
+    assert models.BOAT_CLASSES == ("C", "B", "A", "AA")
+    ranks = [models.class_rank(c) for c in models.BOAT_CLASSES]
+    assert ranks == [1, 2, 3, 4]  # 1-based: 0 is free to mean "unclassed"
+    assert models.class_rank(None) is None
+    assert models.class_rank("D") is None
+
+    parsed = {b.name: b.class_rank for b in boats.parse_rows(BOAT_ROWS)}
+    assert parsed["Bajen"] < parsed["Kaza"] < parsed["Ricke"]
+    assert parsed["Cecil"] is None
+
+
+def test_unknown_boat_class_is_an_error_naming_the_boat_and_row():
+    # A typo would otherwise ship a class no rower rule can ever match.
+    rows = [BOAT_ROWS[0], ["8+", "85 kg", "Nemo", "", "AAA", "", ""]]
+    message = ""
+    try:
+        boats.parse_rows(rows)
+    except boats.BoatsError as exc:
+        message = str(exc)
+    assert "Nemo" in message and "AAA" in message and "row 2" in message
 
 
 def test_unknown_type_is_an_error_naming_the_boat_and_row():
@@ -251,8 +285,29 @@ def test_unavailable_boats_are_never_exported():
         "type": "8+",
         "seats": 8,
         "weight_kg": 85,
-        "class": None,
+        "class": "B",
+        "class_rank": 2,
     }
+    # An unclassed hull ships both keys as null rather than dropping them, so
+    # the C++ side parses every boat the same way.
+    cecil = payload["boats"][-1]
+    assert (cecil["name"], cecil["class"], cecil["class_rank"]) == ("Cecil", None, None)
+
+
+def test_crew_rows_show_the_boat_class_next_to_the_type():
+    payload = {
+        "session": {"heading": "Thursday rowing", "date": "2026-08-13"},
+        "crews": [
+            {"boat": "Bajen", "type": "8+", "seats": 8, "class": "B",
+             "rowers": [{"name": "Anna Berg"}]},
+            # An unclassed boat: `class` is null, and must not print as "None".
+            {"boat": "Cecil", "type": "Trimmer", "seats": 1, "class": None,
+             "rowers": [{"name": "Bjorn Dahl"}]},
+        ],
+    }
+    detail = {row[0].split("  ")[0]: row[1] for row in sheets.crews_to_rows(payload)}
+    assert detail["Bajen"] == "8+  B"
+    assert detail["Cecil"] == "Trimmer"
 
 
 def _snapshot() -> Snapshot:

@@ -19,7 +19,12 @@ struct Boat {
     std::string type;        // rowing shorthand as the Boats tab writes it: "8+"
     int seats = 0;           // crew size, taken from the type by the exporter
     int weight_kg = 0;       // crew weight the hull is built for; 0 = unrated
-    std::string boat_class;  // the Class column, empty until the club fills it
+    std::string boat_class;  // the Class column: "C", "B", "A" or "AA"
+    // Where that class sits on the club's scale: C=1, B=2, A=3, AA=4, and 0
+    // for a boat the Boats tab has not classed. Comes from the exporter so the
+    // letters are spelt out in exactly one place (BOAT_CLASSES in models.py);
+    // compare ranks here rather than parsing boat_class.
+    int class_rank = 0;
 };
 
 // "Bajen  8+  85 kg" - built here rather than at the call sites so the GUI and
@@ -52,11 +57,12 @@ struct Assignment {
 
 // Fill the largest boats first with whoever has accepted.
 //
-// Deliberately ignores rower level and boat class: the club has not decided
-// what either vocabulary is yet (Spond's Grupp 0-4 subgroups may or may not
-// encode rower skill, and the Boats tab's Class column is empty). Both are
-// carried through to the output so a coach can see them, but neither
-// constrains who goes in which boat.
+// Deliberately ignores rower level and boat class. The boat side of that is
+// now decided - the Boats tab classes each hull C to AA, and class_rank
+// carries the order - but the rower side is not: Spond's Grupp 0-4 subgroups
+// may or may not encode skill. Until a rower has a level to compare against,
+// there is nothing to match a class to. Both are carried through to the output
+// so a coach can see them, but neither constrains who goes in which boat.
 //
 // Boats that are damaged or kept at the other lake never reach this function:
 // the exporter drops them.

@@ -72,6 +72,32 @@ int main(int argc, char** argv) {
         check(a.crews.empty() && a.unassigned.empty(), "empty session is safe");
     }
 
+    // --- boat class survives the JSON hop ---------------------------------
+    // Written out and read back through io.h rather than hand-built, because
+    // the risk is in the parsing: `class` and `class_rank` are null for an
+    // unclassed boat, and get<>() on a null throws.
+    {
+        const std::string path = out + ".classtest.json";
+        {
+            std::ofstream f(path);
+            f << R"({"boats":[
+                     {"name":"Bajen","type":"8+","seats":8,"weight_kg":85,
+                      "class":"B","class_rank":2},
+                     {"name":"Cecil","type":"Trimmer","seats":1,
+                      "weight_kg":null,"class":null,"class_rank":null}],
+                     "sessions":[]})";
+        }
+        crewio::Attendance att = crewio::load_attendance(path);
+        check(att.boats.size() == 2, "both boats parsed");
+        check(att.boats[0].boat_class == "B" && att.boats[0].class_rank == 2,
+              "a classed boat keeps its class and rank");
+        check(att.boats[1].boat_class.empty() && att.boats[1].class_rank == 0,
+              "an unclassed boat reads as empty/0 rather than throwing");
+        check(crews::label(att.boats[0]).find("B") != std::string::npos,
+              "the class shows in the boat label");
+        std::remove(path.c_str());
+    }
+
     // --- now the real exported file ---------------------------------------
     std::printf("\nReading %s\n", in.c_str());
     try {

@@ -18,7 +18,7 @@ from .config import (
     require_login,
     require_sheets,
 )
-from .models import ACCEPTED, DECLINED, UNANSWERED, Snapshot
+from .models import ACCEPTED, BOAT_CLASSES, DECLINED, UNANSWERED, Snapshot
 
 
 def _print_summary(snapshot: Snapshot, titles: tuple[str, ...]) -> None:
@@ -187,8 +187,20 @@ def _cmd_boats(config) -> int:
     for boat in sorted(boat_list, key=lambda b: (-b.seats, b.name)):
         weight = f"{boat.weight_kg} kg" if boat.weight_kg else "-"
         seats = f"{boat.seats} seat" + ("s" if boat.seats != 1 else "")
+        # Right-aligned so AA lines up under A rather than shunting the name.
+        boat_class = f"{boat.boat_class or '-':>2}"
         flag = "" if boat.available else "   (not available)"
-        print(f"  {boat.type:<8} {seats:<8} {weight:>6}  {boat.name}{flag}")
+        print(
+            f"  {boat.type:<8} {seats:<8} {weight:>6}  {boat_class}  "
+            f"{boat.name}{flag}"
+        )
+
+    unclassed = sum(1 for b in boat_list if b.boat_class is None)
+    if unclassed:
+        print(
+            f"\n{unclassed} boat(s) have no class yet ('-'). "
+            f"Classes are {', '.join(BOAT_CLASSES)}, lowest to highest."
+        )
     return 0
 
 

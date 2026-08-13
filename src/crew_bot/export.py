@@ -7,7 +7,7 @@ Shape:
       "group": "Hammarby Rodd",
       "boats": [
         {"name": "Bajen", "type": "8+", "seats": 8, "weight_kg": 85,
-         "class": null}
+         "class": "B", "class_rank": 2}
       ],
       "sessions": [
         {
@@ -30,9 +30,13 @@ Times are local, because everything downstream is read by humans in Stockholm.
 and deriving it from a timestamp is one more thing for C++ to get wrong.
 
 Rower `level` is null for now: where skill level comes from is still undecided.
-The key is present so filling it in later touches neither side's parsing. Boat
-`class` is null for the same reason - the Class column of the Boats tab is not
-filled in yet - and `weight_kg` is null for the hulls the club does not rate.
+The key is present so filling it in later touches neither side's parsing.
+
+Boat `class` is the club's C/B/A/AA scale, and `class_rank` is its position on
+that scale (C=1 ... AA=4) so the C++ side can order and compare classes without
+carrying a second copy of the vocabulary - if the club ever adds a class,
+BOAT_CLASSES in models.py is the only place it goes. Both are null for a boat
+the Boats tab has not classed, as `weight_kg` is for the hulls it does not rate.
 
 Only boats marked available are exported: a damaged boat, or one kept at the
 other lake, stays in the inventory but must never be assigned at an open
@@ -60,6 +64,7 @@ def build_payload(snapshot: Snapshot, boats: list[Boat]) -> dict:
                 "seats": b.seats,
                 "weight_kg": b.weight_kg,
                 "class": b.boat_class,
+                "class_rank": b.class_rank,
             }
             for b in boats
             if b.available

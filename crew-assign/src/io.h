@@ -41,13 +41,16 @@ inline Attendance load_attendance(const std::string& path) {
         boat.name = b.value("name", "");
         boat.type = b.value("type", "");
         boat.seats = b.value("seats", 0);
-        // weight_kg and class are null for hulls the club does not rate and
-        // until the Class column is filled in; value() would throw on null.
+        // weight_kg and class/class_rank are null for hulls the club does not
+        // rate and for boats not classed yet; value() would throw on null.
         if (b.contains("weight_kg") && !b["weight_kg"].is_null()) {
             boat.weight_kg = b["weight_kg"].get<int>();
         }
         if (b.contains("class") && !b["class"].is_null()) {
             boat.boat_class = b["class"].get<std::string>();
+        }
+        if (b.contains("class_rank") && !b["class_rank"].is_null()) {
+            boat.class_rank = b["class_rank"].get<int>();
         }
         out.boats.push_back(boat);
     }

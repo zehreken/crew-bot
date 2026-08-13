@@ -105,9 +105,13 @@ def crews_to_rows(payload: dict) -> list[list[str]]:
         boat = crew.get("boat", "?")
         seats = crew.get("seats", "")
         rowers = crew.get("rowers", [])
-        rows.append(
-            [f"{boat}  ({len(rowers)}/{seats} seats)", crew.get("type", "")]
+        # Type and class share the second column: "8+  B". The class is what
+        # tells a coach at the boathouse how demanding the hull is, and it is
+        # null for boats the Boats tab has not classed.
+        detail = "  ".join(
+            part for part in (crew.get("type", ""), crew.get("class") or "") if part
         )
+        rows.append([f"{boat}  ({len(rowers)}/{seats} seats)", detail])
         for position, rower in enumerate(rowers, start=1):
             name = rower.get("name", "") if isinstance(rower, dict) else str(rower)
             rows.append([f"  {position}. {name}", ""])
