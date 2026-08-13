@@ -62,6 +62,36 @@ def _cmd_groups(config) -> int:
     return 0
 
 
+def _cmd_subgroups(config) -> int:
+    require_login(config)
+    require_group(config)
+    rows = asyncio.run(spond_client.list_subgroups(config))
+    if not rows:
+        print(f"{config.group_name} has no subgroups.")
+        return 0
+    print(f"Subgroups in {config.group_name}:\n")
+    width = max(len(name) for name, _ in rows)
+    for name, members in rows:
+        print(f"  {name:<{width}}  {members} member" + ("s" if members != 1 else ""))
+    return 0
+
+
+def _cmd_members(config) -> int:
+    require_login(config)
+    require_group(config)
+    rows = asyncio.run(spond_client.list_members(config))
+    if not rows:
+        print(f"{config.group_name} has no members.")
+        return 0
+
+    print(f"{len(rows)} members of {config.group_name}:\n")
+    width = max(len(name) for name, _ in rows)
+    for name, subs in rows:
+        print(f"  {name:<{width}}  {', '.join(subs) or '-'}")
+    print("\nA rower can be in several subgroups; '-' means none.")
+    return 0
+
+
 def _cmd_titles(config) -> int:
     require_login(config)
     require_group(config)
@@ -179,6 +209,14 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("groups", help="list the Spond groups your login can see")
 
     subparsers.add_parser(
+        "subgroups", help="list the subgroups inside the configured Spond group"
+    )
+
+    subparsers.add_parser(
+        "members", help="list the group's members and the subgroups they are in"
+    )
+
+    subparsers.add_parser(
         "titles", help="list all upcoming event titles and show which ones match"
     )
 
@@ -216,6 +254,10 @@ def main(argv: list[str] | None = None) -> int:
         config = load_config()
         if args.command == "groups":
             return _cmd_groups(config)
+        if args.command == "subgroups":
+            return _cmd_subgroups(config)
+        if args.command == "members":
+            return _cmd_members(config)
         if args.command == "titles":
             return _cmd_titles(config)
         if args.command == "fetch":

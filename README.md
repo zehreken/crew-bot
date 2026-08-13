@@ -115,6 +115,8 @@ cell `A1` of the target tab.
 
 ```powershell
 .\.venv\Scripts\python.exe -m crew_bot groups           # list Spond groups your login can see
+.\.venv\Scripts\python.exe -m crew_bot subgroups        # list the subgroups inside the configured group
+.\.venv\Scripts\python.exe -m crew_bot members          # list members and the subgroups each is in
 .\.venv\Scripts\python.exe -m crew_bot titles           # list upcoming events, marking which match
 .\.venv\Scripts\python.exe -m crew_bot fetch --dry-run  # pull and print, write nothing
 .\.venv\Scripts\python.exe -m crew_bot fetch            # pull and write to the sheet
@@ -188,6 +190,11 @@ Neither rower skill level nor boat class is considered yet. `Rower.level` and
 so filling them in later does not change the shape of anything. Spond has
 `Grupp 0`–`Grupp 4` subgroups that may encode rower level — that decision, and
 what goes in the sheet's Class column, are both still open.
+
+Run `subgroups` to see them. Every member carries the subgroups they belong to,
+and rowers are commonly in more than one (the per-subgroup counts add up to well
+over the group's member count), so if that ever feeds `Rower.level` it has to be
+a list rather than a single value. Nothing reads it today.
 
 Boat weight is exported but not used either. Matching a crew's weight to the
 hull's rating is the obvious next step once the Class column means something.

@@ -136,6 +136,57 @@ async def list_groups(config: Config) -> list[str]:
         return sorted(g.get("name", "?") for g in groups)
 
 
+async def list_subgroups(config: Config) -> list[tuple[str, int]]:
+    """Subgroup names in the configured group, with how many members each has.
+
+    Subgroups arrive inside the group payload, so this costs no extra request.
+    """
+    async with _session(config) as client:
+        groups = await client.get_groups()
+        if not groups:
+            raise SpondError("Spond returned no groups for this login.")
+        group = _find_group(groups, config.group_name)
+
+    counts: dict[str, int] = {}
+    for member in group.get("members") or []:
+        for sub_id in member.get("subGroups") or []:
+            counts[sub_id] = counts.get(sub_id, 0) + 1
+
+    rows = [
+        (sub.get("name", "?"), counts.get(sub.get("id"), 0))
+        for sub in group.get("subGroups") or []
+    ]
+    return sorted(rows, key=lambda row: row[0])
+
+
+async def list_members(config: Config) -> list[tuple[str, list[str]]]:
+    """Every member of the configured group with the subgroups they belong to.
+
+    Membership is a list: a rower can sit in several subgroups at once, and
+    those mix levels with crews, so nothing here interprets what they mean.
+    """
+    async with _session(config) as client:
+        groups = await client.get_groups()
+        if not groups:
+            raise SpondError("Spond returned no groups for this login.")
+        group = _find_group(groups, config.group_name)
+
+    names = {sub.get("id"): sub.get("name", "?") for sub in group.get("subGroups") or []}
+
+    rows = []
+    for member in group.get("members") or []:
+        rower = Rower(
+            id=member.get("id", ""),
+            first_name=member.get("firstName", ""),
+            last_name=member.get("lastName", ""),
+        )
+        # An id with no matching subgroup means the member is in a subgroup this
+        # login cannot see; show the raw id rather than dropping it silently.
+        subs = sorted(names.get(sid, sid) for sid in member.get("subGroups") or [])
+        rows.append((rower.full_name, subs))
+    return sorted(rows, key=lambda row: row[0].lower())
+
+
 async def list_event_titles(config: Config) -> list[tuple[datetime, str, bool]]:
     """Every upcoming event, unfiltered, with whether it currently matches.
 
