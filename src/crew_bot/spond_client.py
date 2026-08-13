@@ -159,11 +159,15 @@ async def list_subgroups(config: Config) -> list[tuple[str, int]]:
     return sorted(rows, key=lambda row: row[0])
 
 
-async def list_members(config: Config) -> list[tuple[str, list[str]]]:
-    """Every member of the configured group with the subgroups they belong to.
+async def list_members(config: Config) -> list[tuple[str, list[str], dict[str, str]]]:
+    """Every member of the configured group, with subgroups and custom fields.
 
     Membership is a list: a rower can sit in several subgroups at once, and
     those mix levels with crews, so nothing here interprets what they mean.
+
+    Custom fields are whatever the group defines in Spond (`fieldDefs`), keyed
+    here by the field's display name rather than its id. They are per-group and
+    filled in by hand, so most are empty for most members.
     """
     async with _session(config) as client:
         groups = await client.get_groups()
@@ -172,6 +176,7 @@ async def list_members(config: Config) -> list[tuple[str, list[str]]]:
         group = _find_group(groups, config.group_name)
 
     names = {sub.get("id"): sub.get("name", "?") for sub in group.get("subGroups") or []}
+    field_names = {fd.get("id"): fd.get("name", "?") for fd in group.get("fieldDefs") or []}
 
     rows = []
     for member in group.get("members") or []:
@@ -183,7 +188,12 @@ async def list_members(config: Config) -> list[tuple[str, list[str]]]:
         # An id with no matching subgroup means the member is in a subgroup this
         # login cannot see; show the raw id rather than dropping it silently.
         subs = sorted(names.get(sid, sid) for sid in member.get("subGroups") or [])
-        rows.append((rower.full_name, subs))
+        fields = {
+            field_names.get(fid, fid): str(value)
+            for fid, value in (member.get("fields") or {}).items()
+            if value not in (None, "")
+        }
+        rows.append((rower.full_name, subs, fields))
     return sorted(rows, key=lambda row: row[0].lower())
 
 

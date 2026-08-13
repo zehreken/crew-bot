@@ -85,10 +85,18 @@ def _cmd_members(config) -> int:
         return 0
 
     print(f"{len(rows)} members of {config.group_name}:\n")
-    width = max(len(name) for name, _ in rows)
-    for name, subs in rows:
-        print(f"  {name:<{width}}  {', '.join(subs) or '-'}")
+    width = max(len(name) for name, _, _ in rows)
+    filled = 0
+    for name, subs, fields in rows:
+        # Custom fields are nearly always empty, so they trail the subgroups
+        # rather than forming a column - a mostly blank column reads as broken.
+        extra = "  ".join(f"{key}: {value}" for key, value in sorted(fields.items()))
+        if extra:
+            filled += 1
+            extra = f"  ({extra})"
+        print(f"  {name:<{width}}  {', '.join(subs) or '-'}{extra}")
     print("\nA rower can be in several subgroups; '-' means none.")
+    print(f"{filled} of {len(rows)} members have any custom field filled in.")
     return 0
 
 

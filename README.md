@@ -194,7 +194,24 @@ what goes in the sheet's Class column, are both still open.
 Run `subgroups` to see them. Every member carries the subgroups they belong to,
 and rowers are commonly in more than one (the per-subgroup counts add up to well
 over the group's member count), so if that ever feeds `Rower.level` it has to be
-a list rather than a single value. Nothing reads it today.
+a list rather than a single value. Nothing reads it today. The listing also
+argues against reading them as levels: `Hammarby Herråtta 2026` is a crew that
+spans Grupp 2, 3 and 4, and `Magelungen` looks like a location.
+
+### What Spond does not carry
+
+Checked against the live group, because it shapes what the assigner can ever do:
+
+- **No sex, gender, or date of birth**, on the member record or on `get_person`
+  (which returns the same shape). Assigning by sex needs the data from
+  somewhere else — a group custom field in Spond, or a column in the sheet
+  alongside the Boats tab.
+- **`profile`** holds only `contactMethod`, `imageUrl`, `unableToReach`, and the
+  names already used. Nothing usable for crews, which is why `members` does not
+  print it.
+- **Custom fields** (`fieldDefs` on the group) are the extension point that does
+  exist. The group defines one, `Oarside`, filled in for 1 of 160 members. The
+  `members` command prints any that are set, in brackets after the subgroups.
 
 Boat weight is exported but not used either. Matching a crew's weight to the
 hull's rating is the obvious next step once the Class column means something.
