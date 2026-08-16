@@ -356,6 +356,39 @@ int main(int argc, char** argv) {
         std::remove(path.c_str());
     }
 
+    // --- the roster and its levels ----------------------------------------
+    // The Rowers tab reads this list and writes levels back out for
+    // `crew_bot levels`, so both directions are worth pinning.
+    {
+        const std::string path = out + ".rostertest.json";
+        {
+            std::ofstream f(path);
+            f << R"({"rowers":[
+                     {"id":"m1","name":"Anna Berg","level":"B"},
+                     {"id":"m2","name":"Bjorn Dahl","level":null}],
+                     "boats":[],"sessions":[]})";
+        }
+        crewio::Attendance att = crewio::load_attendance(path);
+        check(att.rowers.size() == 2, "the whole roster is read, not just crews");
+        check(att.rowers[0].level == "B", "a graded rower keeps their level");
+        check(att.rowers[1].level.empty(),
+              "an ungraded one reads as empty rather than throwing");
+        std::remove(path.c_str());
+
+        // What the coach edits in the dropdown, on its way back to the sheet.
+        std::vector<crews::Rower> edited = att.rowers;
+        edited[1].level = "AA";
+        edited[0].level.clear();  // cleared back to "not set"
+        const nlohmann::json doc = crewio::rowers_payload(edited, "now");
+        check(doc["rowers"].size() == 2, "every rower is written out");
+        check(doc["rowers"][1]["level"] == "AA", "a set level is written");
+        check(doc["rowers"][0]["level"].is_null(),
+              "a cleared level is null, so the sheet cell is blanked");
+        check(doc["rowers"][0].contains("name") &&
+                  !doc["rowers"][0].contains("id"),
+              "name only - the Rowers tab has no id column to match on");
+    }
+
     // --- now the real exported file ---------------------------------------
     std::printf("\nReading %s\n", in.c_str());
     try {

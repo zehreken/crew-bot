@@ -9,6 +9,9 @@ Shape:
         {"name": "Bajen", "type": "8+", "seats": 8, "weight_kg": 85,
          "class": "B", "class_rank": 2}
       ],
+      "rowers": [
+        {"id": "5ADE...", "name": "Albin Torstensson", "level": "B"}
+      ],
       "sessions": [
         {
           "id": "E977...",
@@ -29,8 +32,12 @@ Times are local, because everything downstream is read by humans in Stockholm.
 `date` is pre-computed because it names the sheet tab the crews get written to,
 and deriving it from a timestamp is one more thing for C++ to get wrong.
 
-Rower `level` is null for now: where skill level comes from is still undecided.
-The key is present so filling it in later touches neither side's parsing.
+`rowers` is the whole club - every member of the Spond group, not just the
+people who accepted something. It is what the C++ app's Rowers tab lists, and a
+rower who has signed up for nothing is exactly the one a coach might want to
+look up. `level` comes from the Rowers tab of the sheet (Spond has nowhere to
+put one) and is null for anybody not graded yet. The same level is repeated on
+each `accepted` entry so the solver never has to join the two lists.
 
 Boat `class` is the club's C/B/A/AA scale, and `class_rank` is its position on
 that scale (C=1 ... AA=4) so the C++ side can order and compare classes without
@@ -68,6 +75,15 @@ def build_payload(snapshot: Snapshot, boats: list[Boat]) -> dict:
             }
             for b in boats
             if b.available
+        ],
+        # The whole club, not just whoever accepted: the C++ app's Rowers tab
+        # is a roster view, and a rower who has not signed up for anything is
+        # exactly the one a coach might want to look up.
+        "rowers": [
+            {"id": rower.id, "name": rower.full_name, "level": rower.level}
+            for rower in sorted(
+                snapshot.rowers.values(), key=lambda rower: rower.full_name
+            )
         ],
         "sessions": [
             {
@@ -125,4 +141,23 @@ def load_crews(path: Path) -> dict:
 
     if "crews" not in payload:
         raise ValueError(f"{path} has no 'crews' key. Keys present: {list(payload)}")
+    return payload
+
+
+def load_rowers(path: Path) -> dict:
+    """Read the rowers JSON the C++ app produced, with useful errors."""
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No rowers file at {path}. Set some levels in the crew app's "
+            f"Rowers tab and press 'Write rowers.json', or pass the path with "
+            f"--in."
+        )
+    with path.open(encoding="utf-8") as f:
+        try:
+            payload = json.load(f)
+        except json.JSONDecodeError as exc:
+            raise ValueError(f"{path} is not valid JSON: {exc}") from exc
+
+    if "rowers" not in payload:
+        raise ValueError(f"{path} has no 'rowers' key. Keys present: {list(payload)}")
     return payload

@@ -36,6 +36,11 @@ worksheet_name = "Attendance"
 # available, notes. Created with example rows if it does not exist.
 boats_worksheet_name = "Boats"
 
+# The tab holding the rower roster: name, level. This is the club's own small
+# database - Spond has no field for a rower's level, so it lives here.
+# Run `python -m crew_bot rowers` to create it and keep it up to date.
+rowers_worksheet_name = "Rowers"
+
 [export]
 # Where `crew_bot export` writes the JSON the C++ crew app reads.
 path = "data/attendance.json"

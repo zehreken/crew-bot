@@ -9,10 +9,17 @@
 
 namespace crews {
 
+// The club's rower levels, lowest first - deliberately the same scale as the
+// boat classes, because a level exists to say which class of boat someone can
+// be trusted with. Kept in step with LEVELS in models.py, which is where the
+// sheet's vocabulary is defined.
+inline const char* const kLevels[] = {"C", "B", "A", "AA"};
+inline const int kLevelCount = 4;
+
 struct Rower {
     std::string id;
     std::string name;
-    std::string level;  // empty for now: where skill comes from is undecided
+    std::string level;  // one of kLevels, or empty for a rower not graded yet
 };
 
 struct Boat {

@@ -19,8 +19,22 @@ struct Attendance {
     std::string group;
     std::string generated_at;
     std::vector<crews::Boat> boats;
+    // Every member of the Spond group, not just whoever accepted something.
+    std::vector<crews::Rower> rowers;
     std::vector<crews::Session> sessions;
 };
+
+// One rower out of a JSON object, tolerating a null level for anyone the
+// Rowers tab has not graded.
+inline crews::Rower read_rower(const nlohmann::json& j) {
+    crews::Rower rower;
+    rower.id = j.value("id", "");
+    rower.name = j.value("name", "");
+    if (j.contains("level") && !j["level"].is_null()) {
+        rower.level = j["level"].get<std::string>();
+    }
+    return rower;
+}
 
 inline Attendance load_attendance(const std::string& path) {
     std::ifstream file(path);
@@ -55,6 +69,10 @@ inline Attendance load_attendance(const std::string& path) {
         out.boats.push_back(boat);
     }
 
+    for (const auto& r : doc.value("rowers", nlohmann::json::array())) {
+        out.rowers.push_back(read_rower(r));
+    }
+
     for (const auto& e : doc.value("sessions", nlohmann::json::array())) {
         crews::Session session;
         session.id = e.value("id", "");
@@ -62,14 +80,7 @@ inline Attendance load_attendance(const std::string& path) {
         session.heading = e.value("heading", "");
         session.start = e.value("start", "");
         for (const auto& r : e.value("accepted", nlohmann::json::array())) {
-            crews::Rower rower;
-            rower.id = r.value("id", "");
-            rower.name = r.value("name", "");
-            // level is null until the club decides where skill comes from.
-            if (r.contains("level") && !r["level"].is_null()) {
-                rower.level = r["level"].get<std::string>();
-            }
-            session.accepted.push_back(rower);
+            session.accepted.push_back(read_rower(r));
         }
         out.sessions.push_back(session);
     }
@@ -109,6 +120,37 @@ inline nlohmann::json crews_payload(const crews::Session& session,
         doc["unassigned"].push_back({{"id", r.id}, {"name", r.name}});
     }
     return doc;
+}
+
+// The roster with whatever levels the coach set, for `crew_bot levels` to push
+// back to the Rowers tab of the sheet.
+//
+// Name and level only, matching the two columns that tab has - the id is not
+// written because the sheet does not carry one to match it against.
+inline nlohmann::json rowers_payload(const std::vector<crews::Rower>& rowers,
+                                     const std::string& generated_at) {
+    nlohmann::json doc;
+    doc["generated_at"] = generated_at;
+    doc["rowers"] = nlohmann::json::array();
+    for (const auto& rower : rowers) {
+        nlohmann::json entry;
+        entry["name"] = rower.name;
+        if (rower.level.empty()) {
+            entry["level"] = nullptr;  // not graded, not the empty string
+        } else {
+            entry["level"] = rower.level;
+        }
+        doc["rowers"].push_back(entry);
+    }
+    return doc;
+}
+
+inline void write_rowers(const std::string& path,
+                         const std::vector<crews::Rower>& rowers,
+                         const std::string& generated_at) {
+    std::ofstream out(path);
+    if (!out) throw std::runtime_error("Cannot write " + path);
+    out << rowers_payload(rowers, generated_at).dump(2) << "\n";
 }
 
 inline void write_crews(const std::string& path, const crews::Session& session,

@@ -121,6 +121,8 @@ cell `A1` of the target tab.
 .\.venv\Scripts\python.exe -m crew_bot fetch --dry-run  # pull and print, write nothing
 .\.venv\Scripts\python.exe -m crew_bot fetch            # pull and write to the sheet
 .\.venv\Scripts\python.exe -m crew_bot boats            # list the boat inventory
+.\.venv\Scripts\python.exe -m crew_bot rowers           # build/update the Rowers tab from Spond
+.\.venv\Scripts\python.exe -m crew_bot levels           # push levels set in the crew app back
 .\.venv\Scripts\python.exe -m crew_bot check-sheets     # verify Google credentials and sharing
 ```
 
@@ -182,6 +184,50 @@ C++ app and the day's sheet tab, but it does not yet restrict who is put in
 which boat — that needs a skill level per rower, which the club does not have
 anywhere yet. See below.
 
+### The Rowers tab
+
+The club's roster, and the only place a rower's **level** exists. Spond has
+nowhere to put one — no field for it, and the one custom field the group does
+define is filled in for 1 member out of 160 — so this tab is the database.
+
+```powershell
+.\.venv\Scripts\python.exe -m crew_bot rowers
+```
+
+Creates the tab if it is missing and reconciles it with Spond's member list.
+Two columns, `name` and `level`:
+
+| name | level |
+|---|---|
+| Anna Berg | B |
+| Björn Dahl | |
+
+- Levels are **C, B, A, AA**, lowest to highest — deliberately the *same*
+  scale as the boat classes, because a level exists to say which class of boat
+  someone can be trusted with. Blank means not graded yet. Anything else is an
+  error naming the rower and row.
+- The sync only ever **appends**. An existing level is never touched, and
+  nobody is ever removed — a member who leaves Spond keeps their row, which is
+  what you want of a database and is one line to delete by hand if not.
+- **The name is the key.** That is what fits in a sheet a coach maintains by
+  hand; a Spond id column would be 28 characters nobody can check by eye. The
+  cost is that two members with exactly the same name share one row, which the
+  sync warns about rather than silently merging. If that ever happens for real,
+  an id column is the fix.
+
+Levels can be set either by typing in the sheet, or in the crew app's Rowers
+tab and then pushed back:
+
+```powershell
+.\crew-assign\build\crew-assign.exe             # Rowers tab -> set levels -> Write rowers.json
+.\.venv\Scripts\python.exe -m crew_bot levels   # rowers.json -> the Rowers tab
+```
+
+`levels` only ever rewrites the level cell of a row whose name it recognises —
+it never adds or removes rows, so the tab's own order and anything else you
+have typed there survive. Use `rowers` to add people; that is the command that
+knows about Spond.
+
 ### Crew assignment, as it currently works
 
 **Assign crews** fills the largest boats first, from the list of people who
@@ -191,6 +237,26 @@ one person left over. Every boat it does launch starts full.
 
 Boats marked unavailable are dropped by `export`, so the C++ side never sees
 them.
+
+### The two tabs
+
+The file box, the **Load** button and the status line sit above the tabs, so
+they apply to both and a load error stays readable whichever tab is open.
+
+- **Assignment** — the session picker, the boats and the pool. Everything
+  below is about this tab.
+- **Rowers** — the whole club, one button each, with details on the right for
+  whoever you pick. Everyone in the Spond group, not just the people who
+  accepted something: a rower who has signed up for nothing is exactly the one
+  you might want to look up.
+
+The details panel shows the Spond id, a **level** dropdown (C/B/A/AA, or
+`not set`), which of the loaded sessions they accepted, and — once you have
+assigned — which boat and seat they are in, or that they are in the pool.
+
+Changing a level here only changes it in the app. **Write rowers.json**, then
+`python -m crew_bot levels`, puts it in the sheet, which is where levels
+actually live. The button and the path box are at the top of the tab.
 
 ### Adjusting the crews by hand
 
@@ -257,14 +323,18 @@ checks after each kind of edit.
 in it shows up on the day's sheet tab as `Kaza  (3/4 seats)` — the count comes
 from the boat, so a short crew is visible rather than silently renumbered.
 
-Neither rower skill level nor boat class is considered yet. The boat half is
-now real: each hull carries its class from the Boats tab, and the export ships
-a `class_rank` (C=1 … AA=4) so the C++ side can compare classes without a
-second copy of the letters. What is still missing is the *rower* half — there
-is nothing to compare a class against until a rower has a level. `Rower.level`
-exists in the data model and ships as `null`, so filling it in later does not
-change the shape of anything. Spond has `Grupp 0`–`Grupp 4` subgroups that may
-encode rower level — that decision is still open.
+Neither rower level nor boat class constrains the assignment yet, but both
+sides of the comparison now exist: each hull carries its class from the Boats
+tab, each rower their level from the Rowers tab, and the two use the same
+C/B/A/AA scale on purpose. What is left is to decide the rule — presumably
+"every rower in the boat is at least its class", but whether a single strong
+rower can carry a crew into a better boat is a coaching question, not a coding
+one. The export also ships `class_rank` (C=1 … AA=4) so the C++ side can
+compare without a second copy of the letters.
+
+Spond's `Grupp 0`–`Grupp 4` subgroups may or may not encode something similar;
+the Rowers tab was chosen over them because a coach can see and edit it, and
+because the subgroup listing argues against reading them as levels (see below).
 
 Run `subgroups` to see them. Every member carries the subgroups they belong to,
 and rowers are commonly in more than one (the per-subgroup counts add up to well
@@ -315,6 +385,7 @@ src/crew_bot/
   models.py        Rower / Session / Snapshot / Boat - the shared data model
   spond_client.py  Spond login, event fetch, session title filter
   boats.py         reads the Boats tab
+  rowers.py        the Rowers tab: roster sync and rower levels
   sheets.py        Google auth, attendance writer, crews writer
   export.py        the JSON contract with the C++ app
   cli.py           argparse entry point

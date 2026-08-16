@@ -9,7 +9,7 @@ Run with `pytest`, or directly with `python tests/test_transforms.py`.
 
 from datetime import datetime, timedelta, timezone
 
-from crew_bot import boats, export, models, sheets
+from crew_bot import boats, export, models, rowers, sheets
 from crew_bot.models import ACCEPTED, DECLINED, UNANSWERED, Snapshot
 from crew_bot.config import _as_titles
 from crew_bot.spond_client import (
@@ -308,6 +308,89 @@ def test_crew_rows_show_the_boat_class_next_to_the_type():
     detail = {row[0].split("  ")[0]: row[1] for row in sheets.crews_to_rows(payload)}
     assert detail["Bajen"] == "8+  B"
     assert detail["Cecil"] == "Trimmer"
+
+
+# --- the Rowers tab --------------------------------------------------------
+ROWER_ROWS = [
+    ["Name", "Level"],
+    ["Anna Berg", "B"],
+    ["Bjorn Dahl", " aa "],
+    ["Cecilie Voss", ""],
+    ["", ""],
+]
+
+
+def test_rower_levels_use_the_same_scale_as_the_boats():
+    # One vocabulary, so "can this rower take this boat" stays a comparison.
+    assert models.LEVELS == models.BOAT_CLASSES == ("C", "B", "A", "AA")
+
+
+def test_rower_rows_parse_into_levels_by_name():
+    levels = rowers.parse_rows(ROWER_ROWS)
+    assert levels["anna berg"] == "B"
+    assert levels["bjorn dahl"] == "AA"  # casing and spaces are noise
+    assert levels["cecilie voss"] is None  # not graded yet, not the string ""
+    assert "" not in levels  # the blank spacer row is skipped
+
+
+def test_unknown_level_is_an_error_naming_the_rower_and_row():
+    rows = [ROWER_ROWS[0], ["Nemo", "Z"]]
+    message = ""
+    try:
+        rowers.parse_rows(rows)
+    except rowers.RowersError as exc:
+        message = str(exc)
+    assert "Nemo" in message and "Z" in message and "row 2" in message
+
+
+def test_sync_appends_new_members_and_keeps_existing_levels():
+    new_rows, added, duplicates = rowers.sync_rows(
+        ROWER_ROWS, ["Bjorn Dahl", "Zara Ek", "Ali Ahmed", "anna  berg"]
+    )
+    # Already there, in any casing or spacing - not added twice.
+    assert added == ["Ali Ahmed", "Zara Ek"]  # appended in name order
+    assert duplicates == []
+    levels = rowers.parse_rows(new_rows)
+    assert levels["anna berg"] == "B"  # an existing level is never touched
+    assert levels["zara ek"] is None
+    # Nobody is removed: Cecilie is not in the member list any more but stays.
+    assert "cecilie voss" in levels
+
+
+def test_sync_reports_members_who_share_a_name():
+    # Names are the key, so a collision has to be said out loud.
+    _, _, duplicates = rowers.sync_rows(ROWER_ROWS, ["Nils Ek", "nils ek"])
+    assert duplicates == ["nils ek"]
+
+
+def test_update_levels_only_touches_the_level_column():
+    rows, changed = rowers.update_levels(
+        ROWER_ROWS, {"anna berg": "AA", "cecilie voss": "C", "nobody": "A"}
+    )
+    assert changed == 2  # the unknown name is ignored, not appended
+    levels = rowers.parse_rows(rows)
+    assert levels["anna berg"] == "AA"
+    assert levels["cecilie voss"] == "C"
+    assert levels["bjorn dahl"] == "AA"  # untouched rows keep their value
+    assert len(rows) == len(ROWER_ROWS)
+
+
+def test_levels_reach_the_snapshot_and_the_export():
+    snapshot = rowers.apply_levels(_snapshot(), rowers.parse_rows(ROWER_ROWS))
+    assert snapshot.rowers["m1"].level == "B"  # Anna Berg
+    assert snapshot.rowers["m3"].level is None  # Cecilie Voss, not graded
+
+    payload = export.build_payload(snapshot, boats.parse_rows(BOAT_ROWS))
+    # The whole club, not just whoever accepted - Cecilie declined.
+    assert [r["name"] for r in payload["rowers"]] == [
+        "Anna Berg",
+        "Bjorn Dahl",
+        "Cecilie Voss",
+    ]
+    assert payload["rowers"][0] == {"id": "m1", "name": "Anna Berg", "level": "B"}
+    assert payload["rowers"][2]["level"] is None
+    # And the level rides along on the accepted entries too.
+    assert payload["sessions"][0]["accepted"][0]["level"] == "B"
 
 
 def _snapshot() -> Snapshot:

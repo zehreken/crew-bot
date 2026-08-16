@@ -24,6 +24,12 @@ WAITINGLIST = "waitinglist"
 # nor the C++ side has to know the letters.
 BOAT_CLASSES = ("C", "B", "A", "AA")
 
+# Rower levels are deliberately the same scale, not a parallel one. A level
+# exists to say which class of boat someone can be trusted with, so sharing the
+# vocabulary makes that a comparison ("level >= class") rather than a lookup
+# table mapping one set of letters onto another.
+LEVELS = BOAT_CLASSES
+
 
 def normalise_class(value: str) -> str | None:
     """Tidy a Class cell into one of BOAT_CLASSES, or None if it is not one.

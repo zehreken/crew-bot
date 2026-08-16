@@ -32,9 +32,18 @@ struct AppState {
     std::vector<crews::Boat> boats;
     std::vector<crews::Session> sessions;
 
+    // The whole club. Levels here are edited in the Rowers tab and written to
+    // rowers.json; the sheet, not this app, is where they actually live.
+    std::vector<crews::Rower> roster;
+    std::string rowers_path = "../data/rowers.json";
+
     int selected = 0;
     bool have_assignment = false;
     crews::Assignment assignment;
+
+    // Whose details the Rowers tab is showing. By Spond id rather than by
+    // list position, so it survives a reload or a change of session.
+    std::string selected_rower;
 };
 
 // Where a rower is being dragged from, or to. `crew` indexes the assignment's
@@ -256,6 +265,7 @@ static void load_attendance(AppState& s) {
     s.group = loaded.group;
     s.generated_at = loaded.generated_at;
     s.boats = loaded.boats;
+    s.roster = loaded.rowers;
     s.sessions = loaded.sessions;
     s.selected = 0;
     s.have_assignment = false;
@@ -283,40 +293,170 @@ static void write_crews(AppState& s) {
     set_ok(s, "Wrote " + s.out_path + "  --  now run: python -m crew_bot crews");
 }
 
-// ------------------------------------------------------------------- the UI
+// ------------------------------------------------------------- the rowers tab
 
-static void draw_ui(AppState& s) {
-    const ImGuiViewport* vp = ImGui::GetMainViewport();
-    ImGui::SetNextWindowPos(vp->WorkPos);
-    ImGui::SetNextWindowSize(vp->WorkSize);
-    ImGui::Begin("crew-assign", nullptr,
-                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
-                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
-
-    // --- input file + load
-    char buf[512];
-    snprintf(buf, sizeof(buf), "%s", s.in_path.c_str());
-    if (ImGui::InputText("attendance.json", buf, sizeof(buf))) s.in_path = buf;
-    ImGui::SameLine();
-    if (ImGui::Button("Load")) load_attendance(s);
-
-    if (!s.group.empty()) {
-        ImGui::TextDisabled("%s   exported %s", s.group.c_str(),
-                            s.generated_at.c_str());
+static void write_rowers(AppState& s) {
+    try {
+        crewio::write_rowers(s.rowers_path, s.roster, s.generated_at);
+    } catch (const std::exception& e) {
+        set_error(s, e.what());
+        return;
     }
+    set_ok(s, "Wrote " + s.rowers_path +
+                  "  --  now run: python -m crew_bot levels");
+}
 
-    ImGui::Separator();
+// Where a level sits in kLevels, or -1 for a rower who has not been graded.
+static int level_index(const std::string& level) {
+    for (int i = 0; i < crews::kLevelCount; ++i) {
+        if (level == crews::kLevels[i]) return i;
+    }
+    return -1;
+}
 
-    if (s.sessions.empty()) {
-        ImGui::TextWrapped("No sessions loaded.");
-        ImGui::Spacing();
-        ImGui::TextColored(s.status_is_error ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
-                                             : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
-                           "%s", s.status.c_str());
-        ImGui::End();
+// Where this rower is sitting in the assignment on screen, in words. Empty if
+// there is no assignment yet or they are not part of the selected session.
+static std::string seat_description(const AppState& s, const std::string& id) {
+    if (!s.have_assignment) return "";
+    for (const crews::Crew& crew : s.assignment.crews) {
+        for (int seat = 0; seat < (int)crew.seats.size(); ++seat) {
+            if (crew.seats[seat].id == id) {
+                return crew.boat.name + ", seat " + std::to_string(seat + 1);
+            }
+        }
+    }
+    for (const crews::Rower& rower : s.assignment.unassigned) {
+        if (rower.id == id) return "in the pool";
+    }
+    return "";
+}
+
+// `rower` is the live roster entry, because the level dropdown edits it.
+static void draw_rower_details(AppState& s, crews::Rower& rower) {
+    ImGui::SeparatorText(rower.name.c_str());
+    ImGui::Spacing();
+
+    ImGui::TextDisabled("Spond id");
+    ImGui::TextWrapped("%s", rower.id.c_str());
+    ImGui::Spacing();
+
+    ImGui::TextDisabled("Level");
+    const int chosen = level_index(rower.level);
+    ImGui::SetNextItemWidth(160.0f);
+    if (ImGui::BeginCombo("##level", chosen < 0 ? "not set" : rower.level.c_str())) {
+        // "not set" is a real choice, not just the empty state: a level set by
+        // mistake has to be clearable, and blank is what the sheet stores.
+        if (ImGui::Selectable("not set", chosen < 0)) rower.level.clear();
+        for (int i = 0; i < crews::kLevelCount; ++i) {
+            if (ImGui::Selectable(crews::kLevels[i], i == chosen)) {
+                rower.level = crews::kLevels[i];
+            }
+            if (i == chosen) ImGui::SetItemDefaultFocus();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::TextDisabled("Same scale as the boat classes, lowest to highest.");
+    ImGui::TextDisabled("Set it here, then Write rowers.json below.");
+    ImGui::Spacing();
+
+    ImGui::TextDisabled("Accepted");
+    int accepted_count = 0;
+    for (const crews::Session& session : s.sessions) {
+        for (const crews::Rower& other : session.accepted) {
+            if (other.id != rower.id) continue;
+            ImGui::BulletText("%s  %s", session.date.c_str(),
+                              session.heading.c_str());
+            ++accepted_count;
+            break;
+        }
+    }
+    if (accepted_count == 0) ImGui::TextDisabled("none of the loaded sessions");
+    ImGui::Spacing();
+
+    const std::string seat = seat_description(s, rower.id);
+    if (!seat.empty()) {
+        ImGui::TextDisabled("In the current crews");
+        ImGui::TextWrapped("%s", seat.c_str());
+    }
+}
+
+static void draw_rowers_tab(AppState& s) {
+    if (s.roster.empty()) {
+        // An older attendance.json has no roster in it at all, which is a
+        // re-export away rather than anything to fix here.
+        ImGui::TextWrapped(
+            "No rowers in this file. Run `python -m crew_bot rowers` to build "
+            "the Rowers tab of the sheet, then `python -m crew_bot export` "
+            "again.");
         return;
     }
 
+    int graded = 0;
+    for (const crews::Rower& rower : s.roster) {
+        if (!rower.level.empty()) ++graded;
+    }
+    ImGui::Text("%d rowers in %s, %d with a level", (int)s.roster.size(),
+                s.group.c_str(), graded);
+
+    ImGui::Spacing();
+    if (ImGui::Button("Write rowers.json", ImVec2(160, 0))) write_rowers(s);
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(320.0f);
+    char rbuf[512];
+    snprintf(rbuf, sizeof(rbuf), "%s", s.rowers_path.c_str());
+    if (ImGui::InputText("##rowers_out", rbuf, sizeof(rbuf))) s.rowers_path = rbuf;
+    ImGui::Spacing();
+
+    float pane_height = ImGui::GetContentRegionAvail().y;
+    if (pane_height < 200.0f) pane_height = 200.0f;
+
+    if (ImGui::BeginTable("rower_panes", 2, ImGuiTableFlags_BordersInnerV)) {
+        ImGui::TableNextRow();
+
+        ImGui::TableSetColumnIndex(0);
+        if (ImGui::BeginChild("rower_list", ImVec2(0, pane_height))) {
+            for (int i = 0; i < (int)s.roster.size(); ++i) {
+                ImGui::PushID(i);
+                // Full width so the buttons read as a list rather than as a
+                // ragged column sized to the longest name. The level rides on
+                // the label so the list doubles as an overview of who is
+                // graded.
+                const crews::Rower& rower = s.roster[i];
+                char label[256];
+                snprintf(label, sizeof(label), "%s%s%s", rower.name.c_str(),
+                         rower.level.empty() ? "" : "   ", rower.level.c_str());
+                if (ImGui::Button(label, ImVec2(-FLT_MIN, 0))) {
+                    s.selected_rower = rower.id;
+                }
+                ImGui::PopID();
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::TableSetColumnIndex(1);
+        if (ImGui::BeginChild("rower_details", ImVec2(0, pane_height))) {
+            crews::Rower* chosen = nullptr;
+            for (crews::Rower& rower : s.roster) {
+                if (rower.id == s.selected_rower) {
+                    chosen = &rower;
+                    break;
+                }
+            }
+            if (chosen == nullptr) {
+                ImGui::TextDisabled("Pick a rower on the left.");
+            } else {
+                draw_rower_details(s, *chosen);
+            }
+        }
+        ImGui::EndChild();
+
+        ImGui::EndTable();
+    }
+}
+
+// ------------------------------------------------------------------- the UI
+
+static void draw_assignment_tab(AppState& s) {
     // --- session picker
     const crews::Session& current = s.sessions[s.selected];
     std::string preview = current.heading + "  -  " + current.start;
@@ -347,11 +487,6 @@ static void draw_ui(AppState& s) {
     }
     ImGui::SameLine();
     if (ImGui::Button("Write crews.json", ImVec2(160, 0))) write_crews(s);
-
-    ImGui::Spacing();
-    ImGui::TextColored(s.status_is_error ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
-                                         : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
-                       "%s", s.status.c_str());
     ImGui::Separator();
 
     // --- two columns: the pool on the left, the boats and their seats right
@@ -562,6 +697,52 @@ static void draw_ui(AppState& s) {
     char obuf[512];
     snprintf(obuf, sizeof(obuf), "%s", s.out_path.c_str());
     if (ImGui::InputText("crews.json out", obuf, sizeof(obuf))) s.out_path = obuf;
+}
+
+static void draw_ui(AppState& s) {
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    ImGui::SetNextWindowPos(vp->WorkPos);
+    ImGui::SetNextWindowSize(vp->WorkSize);
+    ImGui::Begin("crew-assign", nullptr,
+                 ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize |
+                     ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoCollapse);
+
+    // --- input file + load, above the tabs: it feeds both of them
+    char buf[512];
+    snprintf(buf, sizeof(buf), "%s", s.in_path.c_str());
+    if (ImGui::InputText("attendance.json", buf, sizeof(buf))) s.in_path = buf;
+    ImGui::SameLine();
+    if (ImGui::Button("Load")) load_attendance(s);
+
+    if (!s.group.empty()) {
+        ImGui::TextDisabled("%s   exported %s", s.group.c_str(),
+                            s.generated_at.c_str());
+    }
+
+    // The status line lives here rather than inside a tab so that a load
+    // error is still readable from whichever tab is open.
+    ImGui::TextColored(s.status_is_error ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
+                                         : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+                       "%s", s.status.c_str());
+    ImGui::Separator();
+
+    if (s.sessions.empty()) {
+        ImGui::TextWrapped("No sessions loaded.");
+        ImGui::End();
+        return;
+    }
+
+    if (ImGui::BeginTabBar("tabs")) {
+        if (ImGui::BeginTabItem("Assignment")) {
+            draw_assignment_tab(s);
+            ImGui::EndTabItem();
+        }
+        if (ImGui::BeginTabItem("Rowers")) {
+            draw_rowers_tab(s);
+            ImGui::EndTabItem();
+        }
+        ImGui::EndTabBar();
+    }
 
     ImGui::End();
 }
@@ -630,12 +811,18 @@ int main(int, char**) {
     AppState state;
     state.in_path = find_existing("data/attendance.json");
     state.out_path = find_existing("data/crews.json");
+    state.rowers_path = find_existing("data/rowers.json");
+    // find_existing falls back to the bare relative path; put the outputs
+    // beside whatever attendance.json we actually found.
     if (!std::filesystem::exists(state.out_path)) {
-        // find_existing falls back to the bare relative path; put crews.json
-        // beside whatever attendance.json we actually found.
         std::filesystem::path p(state.in_path);
         p.replace_filename("crews.json");
         state.out_path = p.string();
+    }
+    if (!std::filesystem::exists(state.rowers_path)) {
+        std::filesystem::path p(state.in_path);
+        p.replace_filename("rowers.json");
+        state.rowers_path = p.string();
     }
     load_attendance(state);
 
