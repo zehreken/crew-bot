@@ -88,8 +88,12 @@ inline nlohmann::json crews_payload(const crews::Session& session,
 
     doc["crews"] = nlohmann::json::array();
     for (const auto& crew : assignment.crews) {
+        // Occupied seats only, in seat order. An empty seat has no name to
+        // write, and the sheet already shows the gap as "(3/4 seats)" from
+        // the seats count below.
         nlohmann::json rowers = nlohmann::json::array();
-        for (const auto& r : crew.rowers) {
+        for (const auto& r : crew.seats) {
+            if (!crews::occupied(r)) continue;
             rowers.push_back({{"id", r.id}, {"name", r.name}});
         }
         doc["crews"].push_back({{"boat", crew.boat.name},

@@ -138,8 +138,9 @@ The full loop, run a couple of hours before a session:
 
 `export` pulls the current sign-ups and the boat inventory into
 `data/attendance.json`. The C++ app reads that, you pick a session and press
-**Assign crews**, then **Write crews.json**. `crews` pushes the result to a tab
-named after the session date, e.g. `2026-08-13`.
+**Assign crews** (or build the crews from scratch — see below), adjust by hand,
+then **Write crews.json**. `crews` pushes the result to a tab named after the
+session date, e.g. `2026-08-13`.
 
 Re-running replaces that tab rather than appending, so if someone drops out you
 can just run the loop again.
@@ -183,13 +184,78 @@ anywhere yet. See below.
 
 ### Crew assignment, as it currently works
 
-Largest boats are filled first, from the list of people who accepted, and a boat
-that cannot be completely filled is skipped rather than launched short. So 9
-rowers with an eight and a four available gives one full eight and one person
-left over.
+**Assign crews** fills the largest boats first, from the list of people who
+accepted, and skips a boat it cannot completely fill rather than launching it
+short. So 9 rowers with an eight and a four available gives one full eight and
+one person left over. Every boat it does launch starts full.
 
 Boats marked unavailable are dropped by `export`, so the C++ side never sees
 them.
+
+### Adjusting the crews by hand
+
+The solver only knows how many seats there are, so the last word is yours.
+
+**Choosing the boats.** Each crew's boat is a dropdown listing every hull that
+is not already out with another crew — a boat can only be on the water once, so
+it can only be in one crew. Next to it:
+
+| | |
+|---|---|
+| `-` | takes the boat off the water; its crew goes back to the pool |
+| `assign` | fills *this* boat's empty seats from the pool |
+| `clear` | empties the boat but keeps it, ready to fill again |
+| `+` (below the last boat) | puts the next free boat out, all seats empty |
+
+Per-boat `assign` tops a boat up rather than re-seating it: anyone already
+aboard stays exactly where they are, so you can place the pair who must row
+together and let it find the other six. Unlike the big **Assign crews** button
+it will part-fill — that button's rule of never launching a boat it cannot
+crew is about choosing which boats go out at all, and here you have already
+chosen this one, so three in a four is more useful than refusing. The status
+line tells you how many seats are still empty.
+
+Picking a **bigger** hull keeps everyone where they are and adds empty seats at
+the stern. Picking a **smaller** one drops the seats off the end, and anyone
+sitting in them goes back to the pool — the seats that survive keep their
+rowers rather than everyone shuffling forward, because a seat number means
+something in a boat.
+
+`+` works before you have pressed **Assign crews**, and that is the only button
+in the Crews pane until you do. Use it if you would rather build the whole
+session by hand: it puts everyone who accepted in the pool and gives you an
+empty boat to drag them into.
+
+**Moving the rowers.**
+
+- Each boat shows **every** seat, numbered bow to stern, whether or not
+  anyone is in it. An empty seat prints as `3.  --`.
+- **Seat → Pool**: takes the rower out. The seat stays where it is and goes
+  empty — the people behind them do not shuffle up a seat. The whole Pool
+  pane is the target, so you can aim at the empty space below the names
+  rather than at one of the rows.
+- **Pool → seat**: puts them in. Dropping on an empty seat just seats them;
+  dropping on a taken one swaps, and the rower who was there goes back to
+  the pool rather than being quietly overwritten.
+- **Seat → seat**: swaps the two rowers, in the same boat or between boats.
+  Dropping on an empty seat moves them there and leaves their old seat
+  empty. This is the bowside/strokeside shuffle, and it never changes how
+  many people are in a boat.
+- Pressing **Assign crews** again throws away every hand edit and re-solves
+  from scratch. That is the undo.
+
+Every one of those is a no-op if it does not make sense — dragging an empty
+seat, dropping something on itself, a drop that lands nowhere, picking a boat
+that is already out. The status line under the buttons says what just
+happened, including where a displaced rower went.
+
+Whatever you do, nobody is ever lost or duplicated: every rower who accepted
+is in exactly one seat or in the pool. That is the property `selftest.exe`
+checks after each kind of edit.
+
+`Write crews.json` writes the occupied seats in seat order. A boat with a gap
+in it shows up on the day's sheet tab as `Kaza  (3/4 seats)` — the count comes
+from the boat, so a short crew is visible rather than silently renumbered.
 
 Neither rower skill level nor boat class is considered yet. The boat half is
 now real: each hull carries its class from the Boats tab, and the export ships
@@ -257,7 +323,7 @@ tests/
 
 crew-assign/         the C++ crew assigner
   build.bat          MSVC build, no CMake
-  src/crews.h        the assignment logic, no UI or JSON in it
+  src/crews.h        the assignment logic and seat edits, no UI or JSON in it
   src/io.h           attendance.json in, crews.json out
   src/main.cpp       ImGui Win32+DX11 window
   src/selftest.cpp   console test using the same io.h / crews.h

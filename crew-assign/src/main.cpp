@@ -37,6 +37,39 @@ struct AppState {
     crews::Assignment assignment;
 };
 
+// Where a rower is being dragged from, or to. `crew` indexes the assignment's
+// crews and `seat` the seat within it - except when `crew` is kPool, and
+// `seat` indexes the pool instead.
+//
+// Indices rather than a pointer or a name: ImGui memcpy's the payload, the
+// vectors behind it can move, and two rowers can share a name.
+static const int kPool = -1;
+
+struct SeatRef {
+    int crew = kPool;
+    int seat = -1;
+};
+
+struct Move {
+    SeatRef from;
+    SeatRef to;
+};
+
+// What the coach asked for while the lists were being drawn. Nothing is
+// applied until drawing has finished: removing a boat mid-iteration would
+// invalidate the very vector being walked, and the seat indices a drop
+// carries only mean anything against the state that was drawn.
+enum class Act { None, MoveRower, Fill, Remove, Clear, SwapBoat, AddBoat };
+
+struct Action {
+    Act what = Act::None;
+    Move move;      // MoveRower
+    int crew = -1;  // Fill, Remove, Clear, SwapBoat
+    int boat = -1;  // SwapBoat: an index into AppState::boats
+};
+
+static const char* kSeatPayload = "CREW_SEAT";
+
 static void set_error(AppState& s, const std::string& message) {
     s.status = message;
     s.status_is_error = true;
@@ -45,6 +78,159 @@ static void set_error(AppState& s, const std::string& message) {
 static void set_ok(AppState& s, const std::string& message) {
     s.status = message;
     s.status_is_error = false;
+}
+
+// Everything a drop can mean, in one place. Called after the lists are drawn,
+// never while they are being iterated.
+static void apply_move(AppState& s, const Move& move) {
+    const bool from_pool = move.from.crew == kPool;
+    const bool to_pool = move.to.crew == kPool;
+
+    if (from_pool && to_pool) return;  // dropped back where it came from
+
+    if (to_pool) {
+        const crews::Rower moved =
+            crews::unseat(s.assignment, move.from.crew, move.from.seat);
+        if (crews::occupied(moved)) set_ok(s, moved.name + " is back in the pool.");
+        return;
+    }
+
+    // Who is sitting there now, so the message can mention being bumped.
+    const crews::Rower* target =
+        crews::seat_at(s.assignment, move.to.crew, move.to.seat);
+    const std::string displaced =
+        (target != nullptr && crews::occupied(*target)) ? target->name : "";
+
+    crews::Rower moved;
+    if (from_pool) {
+        moved = crews::seat_from_pool(s.assignment, move.from.seat, move.to.crew,
+                                      move.to.seat);
+    } else {
+        moved = crews::move_between_seats(s.assignment, move.from.crew,
+                                          move.from.seat, move.to.crew,
+                                          move.to.seat);
+    }
+    if (!crews::occupied(moved)) return;
+
+    const crews::Crew& crew = s.assignment.crews[move.to.crew];
+    std::string message = moved.name + " -> " + crew.boat.name + " seat " +
+                          std::to_string(move.to.seat + 1);
+    if (!displaced.empty()) {
+        // Swapped with a seat, or bumped from one - either way the coach needs
+        // to know where the other rower went.
+        message += from_pool ? ", " + displaced + " back to the pool"
+                             : ", swapped with " + displaced;
+    }
+    set_ok(s, message + ".");
+}
+
+// Everyone who accepted, nobody in a boat yet. The starting point both for
+// "Assign crews" and for a coach who skips it and builds the crews by hand.
+static crews::Assignment start_assignment(const crews::Session& session) {
+    crews::Assignment assignment;
+    assignment.unassigned = session.accepted;  // already in name order
+    return assignment;
+}
+
+static std::string rowers_freed(int count) {
+    if (count == 0) return "";
+    return "  (" + std::to_string(count) + " rower" + (count == 1 ? "" : "s") +
+           " back to the pool)";
+}
+
+static void apply_action(AppState& s, const Action& action,
+                         const crews::Session& session) {
+    // Every crews:: call below bounds-checks and returns -1 rather than
+    // trusting these indices, so a click on a boat that has since gone is a
+    // no-op rather than a crash.
+    const bool known_crew = action.crew >= 0 &&
+                            action.crew < (int)s.assignment.crews.size();
+    const std::string boat_name =
+        known_crew ? s.assignment.crews[action.crew].boat.name : "";
+
+    switch (action.what) {
+        case Act::None:
+            return;
+
+        case Act::MoveRower:
+            apply_move(s, action.move);
+            return;
+
+        case Act::Fill: {
+            const int seated = crews::fill_crew(s.assignment, action.crew);
+            if (seated < 0) return;
+            if (seated == 0) {
+                set_error(s, s.assignment.unassigned.empty()
+                                 ? "Nobody left in the pool."
+                                 : boat_name + " is already full.");
+                return;
+            }
+            const crews::Crew& crew = s.assignment.crews[action.crew];
+            const int empty = crew.boat.seats - crews::filled(crew);
+            std::string message =
+                "Seated " + std::to_string(seated) + " in " + boat_name;
+            if (empty > 0) {
+                // Say so rather than leaving a short crew to be noticed later.
+                message += "  (" + std::to_string(empty) + " seat" +
+                           (empty == 1 ? "" : "s") + " still empty)";
+            }
+            set_ok(s, message + ".");
+            return;
+        }
+
+        case Act::Remove: {
+            const int freed = crews::remove_crew(s.assignment, action.crew);
+            if (freed >= 0) {
+                set_ok(s, "Took " + boat_name + " off the water." +
+                              rowers_freed(freed));
+            }
+            return;
+        }
+
+        case Act::Clear: {
+            const int freed = crews::clear_crew(s.assignment, action.crew);
+            if (freed >= 0) {
+                set_ok(s, "Emptied " + boat_name + "." + rowers_freed(freed));
+            }
+            return;
+        }
+
+        case Act::SwapBoat: {
+            if (action.boat < 0 || action.boat >= (int)s.boats.size()) return;
+            const crews::Boat& boat = s.boats[action.boat];
+            const int displaced = crews::set_boat(s.assignment, action.crew, boat);
+            if (displaced < 0) {
+                set_error(s, boat.name + " is already out with another crew.");
+                return;
+            }
+            set_ok(s, boat_name + " -> " + boat.name + "." +
+                          rowers_freed(displaced));
+            return;
+        }
+
+        case Act::AddBoat: {
+            // The + button doubles as the way to start from an empty sheet
+            // without letting the solver seat anyone first.
+            if (!s.have_assignment) {
+                s.assignment = start_assignment(session);
+                s.have_assignment = true;
+            }
+            const int pick = crews::first_free_boat(s.assignment, s.boats);
+            if (pick < 0) {
+                set_error(s, s.boats.empty()
+                                 ? "No boats were exported. Check the Boats tab."
+                                 : "Every available boat is already out.");
+                return;
+            }
+            const int added = crews::add_crew(s.assignment, s.boats[pick]);
+            if (added >= 0) {
+                set_ok(s, "Added " + s.boats[pick].name +
+                              ".  Pick a different one from its dropdown, or "
+                              "drag rowers into it.");
+            }
+            return;
+        }
+    }
 }
 
 // Look next to the exe and one level up, so the app works whether it is
@@ -168,41 +354,209 @@ static void draw_ui(AppState& s) {
                        "%s", s.status.c_str());
     ImGui::Separator();
 
-    // --- two columns: who accepted, and the resulting crews
+    // --- two columns: the pool on the left, the boats and their seats right
+    //
+    // Nothing is mutated while the lists are being drawn. A drop only records
+    // which seat it came from, and the move is applied once the table is
+    // closed - editing the vectors mid-iteration is how this crashes.
+    Action pending;
+
+    // Leave room under the table for the output path box. Panes scroll, so a
+    // Saturday with forty rowers does not run off the bottom of the window.
+    float pane_height = ImGui::GetContentRegionAvail().y -
+                        ImGui::GetFrameHeightWithSpacing() * 2.0f;
+    if (pane_height < 200.0f) pane_height = 200.0f;
+
     if (ImGui::BeginTable("panes", 2, ImGuiTableFlags_BordersInnerV)) {
         ImGui::TableNextRow();
 
+        // --- left: the pool
         ImGui::TableSetColumnIndex(0);
-        ImGui::SeparatorText("Accepted");
-        for (const auto& r : current.accepted) {
-            ImGui::BulletText("%s", r.name.c_str());
+        if (!s.have_assignment) {
+            ImGui::SeparatorText("Accepted");
+        } else {
+            ImGui::SeparatorText(
+                ("Pool (" + std::to_string(s.assignment.unassigned.size()) + ")")
+                    .c_str());
         }
 
-        ImGui::TableSetColumnIndex(1);
-        ImGui::SeparatorText("Crews");
-        if (!s.have_assignment) {
-            ImGui::TextDisabled("Press Assign crews.");
-        } else {
-            for (const auto& crew : s.assignment.crews) {
-                ImGui::Text("%s  (%d seats)", crews::label(crew.boat).c_str(),
-                            crew.boat.seats);
-                ImGui::Indent();
-                int seat = 1;
-                for (const auto& r : crew.rowers) {
-                    ImGui::Text("%d. %s", seat++, r.name.c_str());
+        if (ImGui::BeginChild("pool", ImVec2(0, pane_height))) {
+            const std::vector<crews::Rower>& pool =
+                s.have_assignment ? s.assignment.unassigned : current.accepted;
+            for (int i = 0; i < (int)pool.size(); ++i) {
+                ImGui::PushID(i);
+                ImGui::Selectable(pool[i].name.c_str());
+                // Only draggable once there are boats to drag into.
+                if (s.have_assignment && ImGui::BeginDragDropSource()) {
+                    SeatRef from{kPool, i};
+                    ImGui::SetDragDropPayload(kSeatPayload, &from, sizeof(from));
+                    ImGui::TextUnformatted(pool[i].name.c_str());
+                    ImGui::EndDragDropSource();
                 }
-                ImGui::Unindent();
-                ImGui::Spacing();
+                ImGui::PopID();
             }
-            if (!s.assignment.unassigned.empty()) {
-                ImGui::SeparatorText("Not assigned");
-                for (const auto& r : s.assignment.unassigned) {
-                    ImGui::BulletText("%s", r.name.c_str());
+
+            if (s.have_assignment) {
+                // Only prompt while a rower is actually in the air, only for
+                // our own payload type, and not when they came from the pool
+                // in the first place.
+                const ImGuiPayload* dragging = ImGui::GetDragDropPayload();
+                if (dragging && dragging->IsDataType(kSeatPayload) &&
+                    ((const SeatRef*)dragging->Data)->crew != kPool) {
+                    ImGui::TextDisabled("  drop here to take out of the boat");
                 }
+                // Whatever is left of the pane is drop target as well, so a
+                // coach can aim at the empty space below the names rather
+                // than having to hit a one-line-tall row.
+                ImVec2 rest = ImGui::GetContentRegionAvail();
+                if (rest.y < ImGui::GetTextLineHeight()) {
+                    rest.y = ImGui::GetTextLineHeight();
+                }
+                ImGui::Dummy(rest);
             }
         }
+        ImGui::EndChild();
+        // The whole pane accepts a rower, not just the names in it.
+        if (ImGui::BeginDragDropTarget()) {
+            const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kSeatPayload);
+            if (payload) {
+                pending.what = Act::MoveRower;
+                pending.move = Move{*(const SeatRef*)payload->Data,
+                                    SeatRef{kPool, -1}};
+            }
+            ImGui::EndDragDropTarget();
+        }
+
+        // --- right: the boats
+        ImGui::TableSetColumnIndex(1);
+        ImGui::SeparatorText("Crews");
+        if (ImGui::BeginChild("crews", ImVec2(0, pane_height))) {
+            if (s.have_assignment) {
+                for (int ci = 0; ci < (int)s.assignment.crews.size(); ++ci) {
+                    const crews::Crew& crew = s.assignment.crews[ci];
+                    ImGui::PushID(ci);
+
+                    // The boat itself is a dropdown: every hull that is not
+                    // already out with another crew, plus this one.
+                    ImGui::SetNextItemWidth(
+                        ImGui::GetContentRegionAvail().x * 0.55f);
+                    if (ImGui::BeginCombo("##boat",
+                                          crews::label(crew.boat).c_str())) {
+                        for (int bi = 0; bi < (int)s.boats.size(); ++bi) {
+                            const crews::Boat& option = s.boats[bi];
+                            if (crews::boat_in_use(s.assignment, option.name, ci)) {
+                                continue;
+                            }
+                            const bool current = option.name == crew.boat.name;
+                            if (ImGui::Selectable(crews::label(option).c_str(),
+                                                  current)) {
+                                pending.what = Act::SwapBoat;
+                                pending.crew = ci;
+                                pending.boat = bi;
+                            }
+                            if (current) ImGui::SetItemDefaultFocus();
+                        }
+                        ImGui::EndCombo();
+                    }
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("-")) {
+                        pending.what = Act::Remove;
+                        pending.crew = ci;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Take %s off the water. Its crew goes back to the pool.",
+                        crew.boat.name.c_str());
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("assign")) {
+                        pending.what = Act::Fill;
+                        pending.crew = ci;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Fill the empty seats in %s from the pool. Anyone "
+                        "already aboard stays where they are.",
+                        crew.boat.name.c_str());
+
+                    ImGui::SameLine();
+                    if (ImGui::Button("clear")) {
+                        pending.what = Act::Clear;
+                        pending.crew = ci;
+                    }
+                    ImGui::SetItemTooltip(
+                        "Empty %s but keep it on the water.",
+                        crew.boat.name.c_str());
+
+                    ImGui::SameLine();
+                    ImGui::TextDisabled("%d/%d seats", crews::filled(crew),
+                                        crew.boat.seats);
+
+                    ImGui::Indent();
+                    // Every seat is drawn, filled or not: an empty seat is the
+                    // thing a coach is looking for, so it has to be visible.
+                    for (int si = 0; si < (int)crew.seats.size(); ++si) {
+                        const crews::Rower& rower = crew.seats[si];
+                        const bool taken = crews::occupied(rower);
+                        ImGui::PushID(si);
+
+                        char row[256];
+                        snprintf(row, sizeof(row), "%d.  %s", si + 1,
+                                 taken ? rower.name.c_str() : "--");
+
+                        // An empty seat is a Selectable too, greyed rather
+                        // than TextDisabled: it needs to be a full-width drop
+                        // target, and a line of text is a thin thing to aim a
+                        // rower at.
+                        if (!taken) {
+                            ImGui::PushStyleColor(
+                                ImGuiCol_Text,
+                                ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                        }
+                        ImGui::Selectable(row);
+                        if (!taken) ImGui::PopStyleColor();
+
+                        if (taken && ImGui::BeginDragDropSource()) {
+                            SeatRef from{ci, si};
+                            ImGui::SetDragDropPayload(kSeatPayload, &from,
+                                                      sizeof(from));
+                            ImGui::TextUnformatted(rower.name.c_str());
+                            ImGui::EndDragDropSource();
+                        }
+
+                        // Every seat accepts a drop, empty or not: an occupied
+                        // one swaps rather than refusing.
+                        if (ImGui::BeginDragDropTarget()) {
+                            const ImGuiPayload* payload =
+                                ImGui::AcceptDragDropPayload(kSeatPayload);
+                            if (payload) {
+                                pending.what = Act::MoveRower;
+                                pending.move = Move{*(const SeatRef*)payload->Data,
+                                                    SeatRef{ci, si}};
+                            }
+                            ImGui::EndDragDropTarget();
+                        }
+                        ImGui::PopID();
+                    }
+                    ImGui::Unindent();
+
+                    ImGui::PopID();
+                    ImGui::Spacing();
+                }
+            }
+
+            // Always available, including before Assign crews has been
+            // pressed: adding a boat is also how you start from nothing and
+            // build the crews entirely by hand.
+            if (ImGui::Button("+")) pending.what = Act::AddBoat;
+            ImGui::SetItemTooltip("Put the next free boat on the water.");
+        }
+        ImGui::EndChild();
+
         ImGui::EndTable();
     }
+
+    // --- apply what was asked for, now that nothing is being iterated
+    apply_action(s, pending, current);
 
     ImGui::Spacing();
     char obuf[512];
