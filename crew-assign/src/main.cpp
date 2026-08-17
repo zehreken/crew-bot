@@ -79,6 +79,10 @@ struct Action {
 
 static const char* kSeatPayload = "CREW_SEAT";
 
+// Marks a rower sitting in a boat their level does not reach. The same red the
+// status line uses for a refusal, because it is the same thing being said.
+static const ImVec4 kWarn = ImVec4(1.0f, 0.5f, 0.4f, 1.0f);
+
 static void set_error(AppState& s, const std::string& message) {
     s.status = message;
     s.status_is_error = true;
@@ -87,6 +91,25 @@ static void set_error(AppState& s, const std::string& message) {
 static void set_ok(AppState& s, const std::string& message) {
     s.status = message;
     s.status_is_error = false;
+}
+
+// A rower's level for display: "C", or "not graded" for anybody the Rowers tab
+// has no level for.
+static std::string level_text(const crews::Rower& rower) {
+    return rower.level.empty() ? "not graded" : rower.level;
+}
+
+// What a placement the level rule would refuse has to say for itself, e.g.
+// "  --  Sara Lind is C, Kaza is class A". Empty when the seat is legal.
+//
+// Dragging is never refused - a coach who wants this crew in this boat has
+// reasons the sheet does not know about - so this is the whole of the
+// enforcement on a manual move: say plainly what was just overridden.
+static std::string class_warning(const crews::Rower& rower,
+                                 const crews::Boat& boat) {
+    if (crews::may_row(rower, boat)) return "";
+    return "  --  " + rower.name + " is " + level_text(rower) + ", " +
+           boat.name + " is class " + boat.boat_class;
 }
 
 // Everything a drop can mean, in one place. Called after the lists are drawn,
@@ -130,7 +153,25 @@ static void apply_move(AppState& s, const Move& move) {
         message += from_pool ? ", " + displaced + " back to the pool"
                              : ", swapped with " + displaced;
     }
-    set_ok(s, message + ".");
+    message += ".";
+
+    // The move stands either way; only the colour and the tail of the line
+    // change. A swap can put two rowers out of their class at once, so both
+    // seats are checked rather than just the one dropped on.
+    std::string warning = class_warning(moved, crew.boat);
+    if (!displaced.empty() && !from_pool) {
+        const crews::Rower* back = crews::seat_at(s.assignment, move.from.crew,
+                                                  move.from.seat);
+        if (back != nullptr && crews::occupied(*back)) {
+            warning += class_warning(*back,
+                                     s.assignment.crews[move.from.crew].boat);
+        }
+    }
+    if (warning.empty()) {
+        set_ok(s, message);
+    } else {
+        set_error(s, message + warning);
+    }
 }
 
 // Everyone who accepted, nobody in a boat yet. The starting point both for
@@ -168,14 +209,29 @@ static void apply_action(AppState& s, const Action& action,
         case Act::Fill: {
             const int seated = crews::fill_crew(s.assignment, action.crew);
             if (seated < 0) return;
-            if (seated == 0) {
-                set_error(s, s.assignment.unassigned.empty()
-                                 ? "Nobody left in the pool."
-                                 : boat_name + " is already full.");
-                return;
-            }
             const crews::Crew& crew = s.assignment.crews[action.crew];
             const int empty = crew.boat.seats - crews::filled(crew);
+
+            // A seat left empty with people still in the pool means the class
+            // stopped them, not the numbers - the one case a coach would
+            // otherwise stare at the screen over.
+            const bool blocked = empty > 0 && !s.assignment.unassigned.empty();
+            const std::string because =
+                blocked ? "  --  nobody left in the pool is " +
+                              crew.boat.boat_class + " or better"
+                        : "";
+
+            if (seated == 0) {
+                if (empty == 0) {
+                    set_error(s, boat_name + " is already full.");
+                } else if (s.assignment.unassigned.empty()) {
+                    set_error(s, "Nobody left in the pool.");
+                } else {
+                    set_error(s, "Seated nobody in " + boat_name + because + ".");
+                }
+                return;
+            }
+
             std::string message =
                 "Seated " + std::to_string(seated) + " in " + boat_name;
             if (empty > 0) {
@@ -183,7 +239,7 @@ static void apply_action(AppState& s, const Action& action,
                 message += "  (" + std::to_string(empty) + " seat" +
                            (empty == 1 ? "" : "s") + " still empty)";
             }
-            set_ok(s, message + ".");
+            set_ok(s, message + because + ".");
             return;
         }
 
@@ -212,8 +268,18 @@ static void apply_action(AppState& s, const Action& action,
                 set_error(s, boat.name + " is already out with another crew.");
                 return;
             }
-            set_ok(s, boat_name + " -> " + boat.name + "." +
-                          rowers_freed(displaced));
+            const std::string message =
+                boat_name + " -> " + boat.name + "." + rowers_freed(displaced);
+            // Moving a crew up a class does not throw anyone out - the same
+            // override a drag gets - but it must not happen silently.
+            const int over = crews::under_classed(s.assignment.crews[action.crew]);
+            if (over > 0) {
+                set_error(s, message + "  --  " + std::to_string(over) +
+                                 " aboard " + (over == 1 ? "is" : "are") +
+                                 " below class " + boat.boat_class + ".");
+            } else {
+                set_ok(s, message);
+            }
             return;
         }
 
@@ -308,10 +374,30 @@ static void write_rowers(AppState& s) {
 
 // Where a level sits in kLevels, or -1 for a rower who has not been graded.
 static int level_index(const std::string& level) {
-    for (int i = 0; i < crews::kLevelCount; ++i) {
-        if (level == crews::kLevels[i]) return i;
+    return crews::level_rank(level) - 1;  // level_rank is 1-based, 0 = ungraded
+}
+
+// Carry a level just set in the Rowers tab to every copy of that rower.
+//
+// The roster the dropdown edits is not what the crews are made of: `assign`
+// reads the session's accepted list, and the seats and the pool hold copies of
+// their own. Now that the level decides which boats a rower can take, grading
+// someone and pressing Assign crews has to use the level on the screen rather
+// than the one the file was exported with.
+static void spread_level(AppState& s, const crews::Rower& graded) {
+    for (crews::Session& session : s.sessions) {
+        for (crews::Rower& rower : session.accepted) {
+            if (rower.id == graded.id) rower.level = graded.level;
+        }
     }
-    return -1;
+    for (crews::Crew& crew : s.assignment.crews) {
+        for (crews::Rower& rower : crew.seats) {
+            if (rower.id == graded.id) rower.level = graded.level;
+        }
+    }
+    for (crews::Rower& rower : s.assignment.unassigned) {
+        if (rower.id == graded.id) rower.level = graded.level;
+    }
 }
 
 // Where this rower is sitting in the assignment on screen, in words. Empty if
@@ -346,16 +432,22 @@ static void draw_rower_details(AppState& s, crews::Rower& rower) {
     if (ImGui::BeginCombo("##level", chosen < 0 ? "not set" : rower.level.c_str())) {
         // "not set" is a real choice, not just the empty state: a level set by
         // mistake has to be clearable, and blank is what the sheet stores.
-        if (ImGui::Selectable("not set", chosen < 0)) rower.level.clear();
+        if (ImGui::Selectable("not set", chosen < 0)) {
+            rower.level.clear();
+            spread_level(s, rower);
+        }
         for (int i = 0; i < crews::kLevelCount; ++i) {
             if (ImGui::Selectable(crews::kLevels[i], i == chosen)) {
                 rower.level = crews::kLevels[i];
+                spread_level(s, rower);
             }
             if (i == chosen) ImGui::SetItemDefaultFocus();
         }
         ImGui::EndCombo();
     }
     ImGui::TextDisabled("Same scale as the boat classes, lowest to highest.");
+    ImGui::TextDisabled("A rower may take any boat up to their own level;");
+    ImGui::TextDisabled("not set counts as C, the stable trainers.");
     ImGui::TextDisabled("Set it here, then Write rowers.json below.");
     ImGui::Spacing();
 
@@ -520,7 +612,14 @@ static void draw_assignment_tab(AppState& s) {
                 s.have_assignment ? s.assignment.unassigned : current.accepted;
             for (int i = 0; i < (int)pool.size(); ++i) {
                 ImGui::PushID(i);
-                ImGui::Selectable(pool[i].name.c_str());
+                // The level rides on the same line: it is what decides which
+                // boats this rower can be dropped into, so it has to be
+                // visible while dragging them.
+                char line[256];
+                snprintf(line, sizeof(line), "%s%s%s", pool[i].name.c_str(),
+                         pool[i].level.empty() ? "" : "   ",
+                         pool[i].level.c_str());
+                ImGui::Selectable(line);
                 // Only draggable once there are boats to drag into.
                 if (s.have_assignment && ImGui::BeginDragDropSource()) {
                     SeatRef from{kPool, i};
@@ -626,6 +725,17 @@ static void draw_assignment_tab(AppState& s) {
                     ImGui::TextDisabled("%d/%d seats", crews::filled(crew),
                                         crew.boat.seats);
 
+                    // Only ever from a coach's own drag: the solver does not
+                    // produce one. Called out on the boat as well as on the
+                    // seat, so a crew that needs a second look is findable
+                    // without reading every name in every boat.
+                    const int over = crews::under_classed(crew);
+                    if (over > 0) {
+                        ImGui::SameLine();
+                        ImGui::TextColored(kWarn, "%d below class %s", over,
+                                           crew.boat.boat_class.c_str());
+                    }
+
                     ImGui::Indent();
                     // Every seat is drawn, filled or not: an empty seat is the
                     // thing a coach is looking for, so it has to be visible.
@@ -634,9 +744,18 @@ static void draw_assignment_tab(AppState& s) {
                         const bool taken = crews::occupied(rower);
                         ImGui::PushID(si);
 
+                        // A rower the boat is too demanding for is marked
+                        // rather than removed: the coach put them there on
+                        // purpose, and the mark is what makes it a decision
+                        // instead of an oversight.
+                        const bool over_boat = taken && !crews::may_row(rower, crew.boat);
+
                         char row[256];
-                        snprintf(row, sizeof(row), "%d.  %s", si + 1,
-                                 taken ? rower.name.c_str() : "--");
+                        snprintf(row, sizeof(row), "%d.  %s%s%s%s", si + 1,
+                                 taken ? rower.name.c_str() : "--",
+                                 taken && !rower.level.empty() ? "   " : "",
+                                 rower.level.c_str(),
+                                 over_boat ? "   below class" : "");
 
                         // An empty seat is a Selectable too, greyed rather
                         // than TextDisabled: it needs to be a full-width drop
@@ -646,9 +765,11 @@ static void draw_assignment_tab(AppState& s) {
                             ImGui::PushStyleColor(
                                 ImGuiCol_Text,
                                 ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
+                        } else if (over_boat) {
+                            ImGui::PushStyleColor(ImGuiCol_Text, kWarn);
                         }
                         ImGui::Selectable(row);
-                        if (!taken) ImGui::PopStyleColor();
+                        if (!taken || over_boat) ImGui::PopStyleColor();
 
                         if (taken && ImGui::BeginDragDropSource()) {
                             SeatRef from{ci, si};
@@ -721,8 +842,7 @@ static void draw_ui(AppState& s) {
 
     // The status line lives here rather than inside a tab so that a load
     // error is still readable from whichever tab is open.
-    ImGui::TextColored(s.status_is_error ? ImVec4(1.0f, 0.5f, 0.4f, 1.0f)
-                                         : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
+    ImGui::TextColored(s.status_is_error ? kWarn : ImVec4(0.6f, 0.9f, 0.6f, 1.0f),
                        "%s", s.status.c_str());
     ImGui::Separator();
 

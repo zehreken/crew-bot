@@ -22,6 +22,31 @@ struct Rower {
     std::string level;  // one of kLevels, or empty for a rower not graded yet
 };
 
+// Where a level sits on the club's scale: C=1, B=2, A=3, AA=4, and 0 for a
+// rower who has not been graded. Deliberately the same numbering as
+// Boat::class_rank below, which is what makes "may this rower take this boat"
+// a comparison of two ints rather than a table of letter pairs.
+inline int level_rank(const std::string& level) {
+    for (int i = 0; i < kLevelCount; ++i) {
+        if (level == kLevels[i]) return i + 1;
+    }
+    return 0;
+}
+
+// What an ungraded rower counts as: the bottom of the scale, C.
+//
+// The alternative - waving them through - would make the rule mean nothing
+// while the roster is mostly ungraded, which is exactly the state it is in
+// (1 of 160 graded at the time of writing). This way a new rower gets the
+// stable trainers by default and grading someone is what unlocks the better
+// hulls, which is the direction the club wants the mistake to fall in.
+inline const int kUngradedRank = 1;
+
+inline int rower_rank(const Rower& rower) {
+    const int rank = level_rank(rower.level);
+    return rank > 0 ? rank : kUngradedRank;
+}
+
 struct Boat {
     std::string name;
     std::string type;        // rowing shorthand as the Boats tab writes it: "8+"
@@ -43,6 +68,19 @@ inline std::string label(const Boat& boat) {
     if (boat.weight_kg > 0) out += "  " + std::to_string(boat.weight_kg) + " kg";
     if (!boat.boat_class.empty()) out += "  " + boat.boat_class;
     return out;
+}
+
+// May this rower take this boat?
+//
+// The club's rule, and the strict reading of it: every rower in a boat must be
+// at least its class. One strong rower does not carry a crew into a better
+// hull - the boat is as demanding for the person in seat 2 as for the stroke,
+// and a coach who wants it anyway can still drag them in by hand.
+//
+// A hull the Boats tab has not classed (rank 0) constrains nobody: that is an
+// unanswered question about the boat, not a judgement that anyone may row it.
+inline bool may_row(const Rower& rower, const Boat& boat) {
+    return rower_rank(rower) >= boat.class_rank;
 }
 
 struct Session {
@@ -71,6 +109,18 @@ inline int filled(const Crew& crew) {
     int count = 0;
     for (const auto& rower : crew.seats)
         if (occupied(rower)) ++count;
+    return count;
+}
+
+// How many of this crew are below their boat's class.
+//
+// `assign` and `fill_crew` never produce one, so anything this counts is a
+// coach's own drag - which is allowed, and which the UI marks rather than
+// undoes. 0 for an unclassed hull, and for an empty boat.
+inline int under_classed(const Crew& crew) {
+    int count = 0;
+    for (const Rower& seat : crew.seats)
+        if (occupied(seat) && !may_row(seat, crew.boat)) ++count;
     return count;
 }
 
@@ -216,6 +266,10 @@ inline int remove_crew(Assignment& assignment, int crew_index) {
 // coach has already chosen this boat, so three in a four is a more useful
 // answer than refusing and leaving them to drag by hand.
 //
+// Only rowers who may take this hull are seated, so a boat can come back
+// part-filled with people still in the pool: those are the ones this boat is
+// too much for. Dragging them in by hand is still allowed.
+//
 // Returns how many rowers sat down, or -1 for an unknown crew.
 inline int fill_crew(Assignment& assignment, int crew_index) {
     if (crew_index < 0 || crew_index >= (int)assignment.crews.size()) return -1;
@@ -223,10 +277,20 @@ inline int fill_crew(Assignment& assignment, int crew_index) {
     Crew& crew = assignment.crews[crew_index];
     int seated = 0;
     for (Rower& seat : crew.seats) {
-        if (assignment.unassigned.empty()) break;
         if (occupied(seat)) continue;
-        seat = assignment.unassigned.front();
-        assignment.unassigned.erase(assignment.unassigned.begin());
+        // The first in the pool who may take the boat, rather than simply the
+        // first: the pool is in name order, and stepping over someone the hull
+        // is too demanding for is the whole point of the class.
+        int pick = -1;
+        for (int i = 0; i < (int)assignment.unassigned.size(); ++i) {
+            if (may_row(assignment.unassigned[i], crew.boat)) {
+                pick = i;
+                break;
+            }
+        }
+        if (pick < 0) break;  // nobody left in the pool may row this boat
+        seat = assignment.unassigned[pick];
+        assignment.unassigned.erase(assignment.unassigned.begin() + pick);
         ++seated;
     }
     return seated;
@@ -293,20 +357,30 @@ inline Rower move_between_seats(Assignment& assignment, int from_crew,
     return moved;
 }
 
-// Fill the largest boats first with whoever has accepted.
+// Fill the largest boats first, from whoever has accepted and may take them.
 //
-// Deliberately ignores rower level and boat class. The boat side of that is
-// now decided - the Boats tab classes each hull C to AA, and class_rank
-// carries the order - but the rower side is not: Spond's Grupp 0-4 subgroups
-// may or may not encode skill. Until a rower has a level to compare against,
-// there is nothing to match a class to. Both are carried through to the output
-// so a coach can see them, but neither constrains who goes in which boat.
+// Two rules, in this order:
+//
+// 1. Nobody sits in a boat their level does not reach (`may_row`). A hull the
+//    Boats tab has not classed takes anyone.
+// 2. Only launch a boat we can fill. A half-crewed eight cannot row, and it
+//    is now short of *eligible* rowers rather than of rowers - twenty C rowers
+//    do not launch the AA eight between them.
+//
+// Big boats first because a part-filled eight is a worse outcome than a
+// part-filled double: it strands more people on the dock. Within a boat the
+// weakest eligible rowers go first, so a rower who only just reaches this
+// class is spent here and the stronger ones are still in the pool when the
+// demanding hulls come round. It is greedy rather than optimal - a boat
+// skipped for want of one eligible rower is not backtracked over - but it is
+// predictable, which matters more on a dock at seven in the morning. A coach
+// who disagrees with a placement drags it.
+//
+// While the roster is ungraded this behaves exactly as it did before levels
+// existed: everyone counts as C, so nothing is filtered and nothing reorders.
 //
 // Boats that are damaged or kept at the other lake never reach this function:
 // the exporter drops them.
-//
-// Big boats first because a part-filled eight is a worse outcome than a
-// part-filled double: it strands more people on the dock.
 //
 // Every crew this returns is full. Seats only become empty afterwards, when a
 // coach takes someone out with `unseat`.
@@ -322,27 +396,41 @@ inline Assignment assign(const Session& session, const std::vector<Boat>& boats)
         return a.name < b.name;
     });
 
-    std::vector<Rower> pool = session.accepted;
-    size_t next = 0;
+    const std::vector<Rower>& pool = session.accepted;
+    // Indices rather than a shrinking vector: a rower one boat cannot take has
+    // to still be there, in their original place, for the next boat to look at.
+    std::vector<bool> seated(pool.size(), false);
 
     for (const auto& boat : usable) {
-        if (next >= pool.size()) break;
+        std::vector<int> eligible;
+        for (int i = 0; i < (int)pool.size(); ++i) {
+            if (!seated[i] && may_row(pool[i], boat)) eligible.push_back(i);
+        }
+        if ((int)eligible.size() < boat.seats) continue;
 
-        const size_t remaining = pool.size() - next;
-        // Only launch a boat we can fill. A half-crewed eight cannot row.
-        if (remaining < static_cast<size_t>(boat.seats)) continue;
+        // Weakest first, keeping name order within a level (stable, and the
+        // pool arrives sorted by name).
+        std::stable_sort(eligible.begin(), eligible.end(), [&](int a, int b) {
+            return rower_rank(pool[a]) < rower_rank(pool[b]);
+        });
+        std::vector<int> chosen(eligible.begin(), eligible.begin() + boat.seats);
+        // Seat them in pool order, not in the order they were picked: who is in
+        // the boat is a levels question, but the crew list a coach reads off
+        // the screen should still be in name order.
+        std::sort(chosen.begin(), chosen.end());
 
         Crew crew;
         crew.boat = boat;
         crew.seats.resize(boat.seats);  // every seat exists, filled or not
         for (int seat = 0; seat < boat.seats; ++seat) {
-            crew.seats[seat] = pool[next++];
+            crew.seats[seat] = pool[chosen[seat]];
+            seated[chosen[seat]] = true;
         }
         result.crews.push_back(std::move(crew));
     }
 
-    for (; next < pool.size(); ++next) {
-        result.unassigned.push_back(pool[next]);
+    for (int i = 0; i < (int)pool.size(); ++i) {
+        if (!seated[i]) result.unassigned.push_back(pool[i]);
     }
     return result;
 }

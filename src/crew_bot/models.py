@@ -70,10 +70,11 @@ class Boat:
 
     `boat_class` is the Class column: one of BOAT_CLASSES ("C" to "AA", how
     demanding the hull is), or None for a boat the tab has not classed yet.
-    Which rowers may take which class is still undecided, so it constrains
-    nothing yet - but it is a closed vocabulary rather than free text, so a
-    typo in the sheet is caught at read time. Spelt with the prefix because
-    `class` is a keyword.
+    It is what gates the assignment on the C++ side: every rower in a boat must
+    be at least its class, and an unclassed hull constrains nobody. A closed
+    vocabulary rather than free text, so a typo in the sheet is caught at read
+    time rather than producing a class no rower can ever match. Spelt with the
+    prefix because `class` is a keyword.
 
     `available` is what the crew assigner honours: a damaged boat, or one
     kept at the other lake, stays in the inventory but is never assigned at an
@@ -99,7 +100,9 @@ class Rower:
     id: str
     first_name: str
     last_name: str
-    # Unset until we decide where skill level comes from.
+    # From the Rowers tab of the sheet, which is the only place it exists -
+    # Spond has nowhere to put one. None means not graded yet, which the
+    # assigner reads as the bottom of the scale ("C"), not as unconstrained.
     level: str | None = None
 
     @property

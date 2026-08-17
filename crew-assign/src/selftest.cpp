@@ -57,10 +57,15 @@ int main(int argc, char** argv) {
     // --- taking a rower out of a boat -------------------------------------
     // The drag-to-pool action in the GUI. The seat has to stay behind, or the
     // rowers below it would all shuffle up a seat when one person leaves.
+    //
+    // The rowers here and in the sections below are graded to their boats on
+    // purpose: these check the seat and boat mechanics, and a crew the level
+    // rule would refuse would never reach them. The rule itself is checked in
+    // its own section further down.
     {
         crews::Session s;
         for (int i = 0; i < 4; ++i) {
-            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
+            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), "B"});
         }
         std::vector<crews::Boat> boats = {{"Four", "4x/4-", 4, 75, "B", 2}};
         crews::Assignment a = crews::assign(s, boats);
@@ -108,7 +113,7 @@ int main(int argc, char** argv) {
     {
         crews::Session s;
         for (int i = 0; i < 5; ++i) {
-            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
+            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), "B"});
         }
         std::vector<crews::Boat> boats = {{"Four", "4x/4-", 4, 75, "B", 2}};
         crews::Assignment a = crews::assign(s, boats);
@@ -155,7 +160,7 @@ int main(int argc, char** argv) {
     {
         crews::Session s;
         for (int i = 0; i < 6; ++i) {
-            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
+            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), "B"});
         }
         std::vector<crews::Boat> boats = {{"Four", "4x/4-", 4, 75, "B", 2},
                                           {"Double", "2x", 2, 70, "C", 1}};
@@ -195,7 +200,9 @@ int main(int argc, char** argv) {
     {
         crews::Session s;
         for (int i = 0; i < 8; ++i) {
-            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
+            // AA, so every hull in the inventory below is open to them and the
+            // boat operations are what is being checked.
+            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), "AA"});
         }
         // Inventory order, which is the order the + button walks.
         std::vector<crews::Boat> inventory = {{"Four", "4x/4-", 4, 75, "B", 2},
@@ -253,7 +260,7 @@ int main(int argc, char** argv) {
         // picked this boat, so two in a four beats refusing.
         {
             crews::Assignment part;
-            part.unassigned = {{"x", "Only", ""}, {"y", "Two", ""}};
+            part.unassigned = {{"x", "Only", "AA"}, {"y", "Two", "AA"}};
             crews::add_crew(part, inventory[0]);  // a four
             check(crews::fill_crew(part, 0) == 2,
                   "a four takes the only two in the pool");
@@ -328,6 +335,117 @@ int main(int argc, char** argv) {
         std::vector<crews::Boat> boats = {{"Double", "2x", 2, 70, ""}};
         crews::Assignment a = crews::assign(s, boats);
         check(a.crews.empty() && a.unassigned.empty(), "empty session is safe");
+    }
+
+    // --- the level rule ----------------------------------------------------
+    // A rower may take a boat only if their level reaches its class, every
+    // seat, no exceptions. Ungraded counts as C, the bottom of the scale.
+    {
+        const crews::Boat tub{"Tub", "2x", 2, 70, "C", 1};
+        const crews::Boat shell{"Shell", "2x", 2, 70, "AA", 4};
+        const crews::Boat unclassed{"Unclassed", "2x", 2, 70, "", 0};
+
+        check(crews::level_rank("C") == 1 && crews::level_rank("AA") == 4,
+              "a level's rank matches the boat class it is named after");
+        check(crews::level_rank("") == 0, "an ungraded rower has no rank");
+        check(crews::rower_rank({"1", "Nobody", ""}) == 1,
+              "but counts as C when it comes to boats");
+
+        check(crews::may_row({"1", "Ungraded", ""}, tub),
+              "an ungraded rower may take a C boat");
+        check(!crews::may_row({"1", "Ungraded", ""}, shell),
+              "but not an AA one");
+        check(crews::may_row({"1", "Ungraded", ""}, unclassed),
+              "an unclassed hull constrains nobody");
+        check(crews::may_row({"1", "Strong", "AA"}, tub),
+              "a strong rower may still take an easy boat");
+        check(crews::may_row({"1", "Exact", "B"}, {"B boat", "2x", 2, 70, "B", 2}),
+              "meeting the class exactly is enough");
+    }
+
+    // A boat nobody may take is skipped, however many turned up.
+    {
+        crews::Session s;
+        for (int i = 0; i < 4; ++i) {
+            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
+        }
+        std::vector<crews::Boat> boats = {{"Racer", "4x/4-", 4, 75, "A", 3},
+                                          {"Tub", "4x/4-", 4, 75, "C", 1}};
+        crews::Assignment a = crews::assign(s, boats);
+        check(a.crews.size() == 1 && a.crews[0].boat.name == "Tub",
+              "four ungraded rowers get the C four, not the A one");
+        check(a.unassigned.empty(), "and all four of them are in it");
+        check(crews::under_classed(a.crews[0]) == 0,
+              "the solver never produces an under-classed crew");
+    }
+
+    // The weakest eligible rowers are spent first, so the strong ones are
+    // still in the pool when a demanding hull comes round. Without that, the
+    // C double here would take the two AA rowers by name order and the AA
+    // double would have nobody left to launch with.
+    {
+        crews::Session s;
+        s.accepted = {{"1", "Ava", "AA"},
+                      {"2", "Axel", "AA"},
+                      {"3", "Cec", "C"},
+                      {"4", "Cyd", "C"}};
+        // Equal seats, so the boats are taken in name order: the C one first.
+        std::vector<crews::Boat> boats = {{"Alpha", "2x", 2, 70, "C", 1},
+                                          {"Zeta", "2x", 2, 70, "AA", 4}};
+        crews::Assignment a = crews::assign(s, boats);
+        check(a.crews.size() == 2, "both doubles go out");
+        check(a.crews[0].seats[0].name == "Cec" &&
+                  a.crews[0].seats[1].name == "Cyd",
+              "the C double takes the two C rowers");
+        check(a.crews[1].seats[0].name == "Ava" &&
+                  a.crews[1].seats[1].name == "Axel",
+              "leaving the AA double the two who can row it");
+        check(a.unassigned.empty(), "nobody is left on the dock");
+        check(a.crews[0].seats[0].name < a.crews[0].seats[1].name,
+              "and a crew is still seated in name order");
+    }
+
+    // An ungraded roster behaves exactly as it did before levels existed.
+    {
+        crews::Session s;
+        for (int i = 0; i < 13; ++i) {
+            s.accepted.push_back({std::to_string(i), "Rower " + std::to_string(i), ""});
+        }
+        std::vector<crews::Boat> boats = {{"Four", "4x/4-", 4, 75, "C", 1},
+                                          {"Eight", "8+", 8, 85, "C", 1},
+                                          {"Double", "2x", 2, 70, "C", 1}};
+        crews::Assignment a = crews::assign(s, boats);
+        check(a.crews.size() == 2 && a.crews[0].boat.name == "Eight",
+              "13 ungraded rowers fill the C eight and four as before");
+        check(a.crews[0].seats[0].id == "0" && a.crews[0].seats[7].id == "7",
+              "in the order they arrived, since nothing sorts equal levels");
+        check(a.unassigned.size() == 1 && a.unassigned[0].id == "12",
+              "and the same rower is left over");
+    }
+
+    // Filling one boat by hand steps over the rowers it is too much for, and
+    // leaves them in the pool rather than seating them.
+    {
+        crews::Assignment a;
+        a.unassigned = {{"1", "Ava", "AA"}, {"2", "Cec", "C"}};
+        const crews::Boat shell{"Shell", "2x", 2, 70, "AA", 4};
+        check(crews::add_crew(a, shell) == 0, "the AA double goes out empty");
+
+        check(crews::fill_crew(a, 0) == 1,
+              "filling it seats only the rower who may take it");
+        check(a.crews[0].seats[0].name == "Ava", "and it is the AA one");
+        check(a.unassigned.size() == 1 && a.unassigned[0].name == "Cec",
+              "the C rower stays in the pool");
+        check(crews::fill_crew(a, 0) == 0,
+              "asking again seats nobody rather than looping");
+        check(crews::under_classed(a.crews[0]) == 0, "the half crew is legal");
+
+        // The coach's own override: allowed, and counted.
+        check(crews::seat_from_pool(a, 0, 0, 1).name == "Cec",
+              "but a coach can still drag them in by hand");
+        check(crews::under_classed(a.crews[0]) == 1,
+              "and that is what under_classed reports");
+        check(crews::filled(a.crews[0]) == 2, "with the boat full either way");
     }
 
     // --- boat class survives the JSON hop ---------------------------------

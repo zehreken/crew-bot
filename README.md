@@ -179,10 +179,10 @@ entirely.
   is fine and means the boat has not been classed yet; `boats` prints those
   as `-` and counts them, so it is easy to see what is left to fill in.
 
-**Note:** `class` is read, validated and carried all the way through to the
-C++ app and the day's sheet tab, but it does not yet restrict who is put in
-which boat — that needs a skill level per rower, which the club does not have
-anywhere yet. See below.
+**`class` is what gates the assignment.** Every rower put in a boat must be at
+least its class, so a `C` hull takes anyone and an `AA` hull only takes AA
+rowers. An unclassed boat constrains nobody. See
+[Levels and boat classes](#levels-and-boat-classes).
 
 ### The Rowers tab
 
@@ -204,8 +204,11 @@ Two columns, `name` and `level`:
 
 - Levels are **C, B, A, AA**, lowest to highest — deliberately the *same*
   scale as the boat classes, because a level exists to say which class of boat
-  someone can be trusted with. Blank means not graded yet. Anything else is an
-  error naming the rower and row.
+  someone can be trusted with. Anything else is an error naming the rower and
+  row.
+- **Blank means not graded, and counts as C** when boats are handed out: an
+  ungraded rower gets the stable trainers, and grading them is what unlocks the
+  better hulls. Until you fill this column in, every crew goes out in a C boat.
 - The sync only ever **appends**. An existing level is never touched, and
   nobody is ever removed — a member who leaves Spond keeps their row, which is
   what you want of a database and is one line to delete by hand if not.
@@ -235,6 +238,14 @@ accepted, and skips a boat it cannot completely fill rather than launching it
 short. So 9 rowers with an eight and a four available gives one full eight and
 one person left over. Every boat it does launch starts full.
 
+Nobody is put in a boat their **level** does not reach: a hull's class must be
+met by every rower in it. A boat short of *eligible* rowers is skipped the same
+way a boat short of rowers is — twenty C rowers do not launch the AA eight
+between them. Within a boat the weakest eligible rowers go first, so a rower
+who only just reaches this class is spent here and the stronger ones are still
+in the pool when the demanding hulls come round. See
+[Levels and boat classes](#levels-and-boat-classes).
+
 Boats marked unavailable are dropped by `export`, so the C++ side never sees
 them.
 
@@ -258,9 +269,14 @@ Changing a level here only changes it in the app. **Write rowers.json**, then
 `python -m crew_bot levels`, puts it in the sheet, which is where levels
 actually live. The button and the path box are at the top of the tab.
 
+A level set here does take effect immediately for the boats: press **Assign
+crews** after grading someone and the new level is what decides which hulls
+they can take, without a round trip through the sheet and a re-export.
+
 ### Adjusting the crews by hand
 
-The solver only knows how many seats there are, so the last word is yours.
+The solver only knows how many seats a boat has and what class it is, so the
+last word is yours.
 
 **Choosing the boats.** Each crew's boat is a dropdown listing every hull that
 is not already out with another crew — a boat can only be on the water once, so
@@ -280,6 +296,10 @@ it will part-fill — that button's rule of never launching a boat it cannot
 crew is about choosing which boats go out at all, and here you have already
 chosen this one, so three in a four is more useful than refusing. The status
 line tells you how many seats are still empty.
+
+It respects the class as well, and steps over anyone in the pool the boat is
+too demanding for. A boat that comes back part-filled with people still in the
+pool says so: `nobody left in the pool is A or better`.
 
 Picking a **bigger** hull keeps everyone where they are and adds empty seats at
 the stern. Picking a **smaller** one drops the seats off the end, and anyone
@@ -307,6 +327,10 @@ empty boat to drag them into.
   Dropping on an empty seat moves them there and leaves their old seat
   empty. This is the bowside/strokeside shuffle, and it never changes how
   many people are in a boat.
+- Dragging is never refused on level grounds. You can put anyone in any boat —
+  you have reasons the sheet does not know about — but the seat turns red and
+  reads `Sara Lind   C   below class`, the boat's header says `1 below class
+  A`, and the status line spells out what was overridden. Marked, not undone.
 - Pressing **Assign crews** again throws away every hand edit and re-solves
   from scratch. That is the undo.
 
@@ -323,14 +347,37 @@ checks after each kind of edit.
 in it shows up on the day's sheet tab as `Kaza  (3/4 seats)` — the count comes
 from the boat, so a short crew is visible rather than silently renumbered.
 
-Neither rower level nor boat class constrains the assignment yet, but both
-sides of the comparison now exist: each hull carries its class from the Boats
-tab, each rower their level from the Rowers tab, and the two use the same
-C/B/A/AA scale on purpose. What is left is to decide the rule — presumably
-"every rower in the boat is at least its class", but whether a single strong
-rower can carry a crew into a better boat is a coaching question, not a coding
-one. The export also ships `class_rank` (C=1 … AA=4) so the C++ side can
-compare without a second copy of the letters.
+### Levels and boat classes
+
+Each hull carries a **class** from the Boats tab, each rower a **level** from
+the Rowers tab, and the two are the same C/B/A/AA scale on purpose: the whole
+comparison is `level >= class`. The export ships `class_rank` (C=1 … AA=4) so
+the C++ side orders them without a second copy of the letters.
+
+The rule, decided by the club:
+
+- **Every rower in a boat must be at least its class.** One strong rower does
+  not carry a crew into a better hull — an A four is as demanding for the
+  person in seat 2 as for the stroke.
+- **Ungraded counts as C**, the bottom of the scale. Waving ungraded rowers
+  through would make the rule mean nothing while the roster is mostly ungraded,
+  which is the state it starts in. A new member gets the stable trainers and
+  grading them is what unlocks the rest.
+- **An unclassed hull constrains nobody.** A blank Class cell is an unanswered
+  question about the boat, not a judgement that anyone may row it.
+- **Assign crews and per-boat assign obey it; dragging does not.** The solver
+  never produces an under-classed crew. A coach can, deliberately, and the app
+  marks it in red rather than undoing it.
+
+The consequence worth knowing before you fill the Rowers tab in: with nobody
+graded, every crew goes out in a C boat, and the eights and the A/AA hulls stay
+on the rack no matter how many people turn up.
+
+Being greedy, the solver does not backtrack: a boat skipped for want of one
+eligible rower stays skipped even if a different split would have launched
+both. It goes big boats first and weakest-eligible first within a boat, which
+is predictable on a dock at seven in the morning in a way a search would not
+be. Where it gets it wrong, drag it.
 
 Spond's `Grupp 0`–`Grupp 4` subgroups may or may not encode something similar;
 the Rowers tab was chosen over them because a coach can see and edit it, and
@@ -358,9 +405,10 @@ Checked against the live group, because it shapes what the assigner can ever do:
   exist. The group defines one, `Oarside`, filled in for 1 of 160 members. The
   `members` command prints any that are set, in brackets after the subgroups.
 
-Boat weight is exported but not used either. With the Class column now filled
-in, the two obvious next steps are a level per rower (so class can gate who
-takes which boat) and matching a crew's weight to the hull's rating.
+Boat weight is exported but not used. Now that class gates who takes which
+boat, matching a crew's weight to the hull's rating is the obvious next step —
+and unlike the class rule it is arithmetic on a number the Boats tab already
+has, so it needs no new data, only a decision about how much slack to allow.
 
 ## Sheet format
 
