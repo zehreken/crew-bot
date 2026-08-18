@@ -1,0 +1,445 @@
+<script>
+/**
+ * Crew assignment and the seat edits - a port of crew-assign/src/crews.h.
+ *
+ * This runs in the browser, not on the server, and that is deliberate: every
+ * drag a coach makes is one of the functions below, and a google.script.run
+ * round trip in the middle of a drag is several hundred milliseconds. The page
+ * owns the assignment; the server only loads the data and saves the result.
+ *
+ * No DOM in here, exactly as the C++ had no ImGui in it. App.html turns pointer
+ * events into these calls and re-renders from what they return.
+ *
+ * Two deliberate differences from the C++:
+ *   - An empty seat is `null`, not a Rower with a blank id.
+ *   - The edits return null instead of an empty Rower when nothing moved.
+ *
+ * The class scale is repeated here rather than shared with Models.gs, because
+ * server code is not reachable from the page. That is the same arrangement
+ * crews.h had with its own kLevels mirroring LEVELS in models.py: two small
+ * copies of a four-element vocabulary that must be kept in step.
+ */
+
+// Lowest first: C is the stable trainer, AA the racing shell. Keep in step
+// with BOAT_CLASSES in Models.gs.
+var BOAT_CLASSES = ['C', 'B', 'A', 'AA'];
+var LEVELS = BOAT_CLASSES;
+
+/** 1-based position on the scale: C -> 1 ... AA -> 4, null if not on it. */
+function classRank_(boatClass) {
+  if (boatClass === null || boatClass === undefined) {
+    return null;
+  }
+  var index = BOAT_CLASSES.indexOf(boatClass);
+  return index === -1 ? null : index + 1;
+}
+
+/** Compare by code point, matching the order the sheet side sorts in. */
+function compareNames_(a, b) {
+  var left = String(a || '');
+  var right = String(b || '');
+  if (left < right) {
+    return -1;
+  }
+  return left > right ? 1 : 0;
+}
+
+// What an ungraded rower counts as: the bottom of the scale, C.
+//
+// Waving them through would make the rule mean nothing while the roster is
+// mostly ungraded, which is the state it starts in. A new rower gets the
+// stable trainers, and grading them is what unlocks the better hulls.
+var UNGRADED_RANK = 1;
+
+function rowerRank_(rower) {
+  var rank = classRank_(rower ? rower.level : null);
+  return rank ? rank : UNGRADED_RANK;
+}
+
+function boatRank_(boat) {
+  return boat && boat.class_rank ? boat.class_rank : 0;
+}
+
+/**
+ * May this rower take this boat?
+ *
+ * The club's rule, strictly: every rower in a boat must be at least its class.
+ * One strong rower does not carry a crew into a better hull. An unclassed hull
+ * constrains nobody - that is an unanswered question about the boat, not a
+ * judgement that anyone may row it.
+ */
+function mayRow_(rower, boat) {
+  return rowerRank_(rower) >= boatRank_(boat);
+}
+
+/** "Bajen  8+  85 kg  B" */
+function boatLabel_(boat) {
+  var out = boat.name;
+  if (boat.type) {
+    out += '  ' + boat.type;
+  }
+  if (boat.weight_kg > 0) {
+    out += '  ' + boat.weight_kg + ' kg';
+  }
+  if (boat['class']) {
+    out += '  ' + boat['class'];
+  }
+  return out;
+}
+
+function filled_(crew) {
+  return crew.seats.filter(function (seat) {
+    return !!seat;
+  }).length;
+}
+
+/**
+ * How many of this crew are below their boat's class.
+ *
+ * assign_ and fillCrew_ never produce one, so anything this counts is a
+ * coach's own drag - allowed, and marked rather than undone.
+ */
+function underClassed_(crew) {
+  return crew.seats.filter(function (seat) {
+    return seat && !mayRow_(seat, crew.boat);
+  }).length;
+}
+
+function seatExists_(assignment, crewIndex, seatIndex) {
+  if (crewIndex < 0 || crewIndex >= assignment.crews.length) {
+    return false;
+  }
+  var seats = assignment.crews[crewIndex].seats;
+  return seatIndex >= 0 && seatIndex < seats.length;
+}
+
+function seatAt_(assignment, crewIndex, seatIndex) {
+  if (!seatExists_(assignment, crewIndex, seatIndex)) {
+    return undefined;
+  }
+  return assignment.crews[crewIndex].seats[seatIndex];
+}
+
+/**
+ * Put a rower in the pool, in name order rather than at the end: a coach
+ * looking for someone should not have to check the bottom of the list as well
+ * as the middle.
+ */
+function intoPool_(assignment, rower) {
+  var at = 0;
+  while (
+    at < assignment.unassigned.length &&
+    compareNames_(assignment.unassigned[at].name, rower.name) < 0
+  ) {
+    at += 1;
+  }
+  assignment.unassigned.splice(at, 0, rower);
+}
+
+/**
+ * Take a rower out of a seat and put them back in the pool.
+ *
+ * The seat is emptied rather than removed, and the boat stays even if it
+ * empties completely - the coach took one person out of a boat, they did not
+ * put the boat away. The rowers behind do not shuffle up.
+ */
+function unseat_(assignment, crewIndex, seatIndex) {
+  var seat = seatAt_(assignment, crewIndex, seatIndex);
+  if (!seat) {
+    return null;
+  }
+  intoPool_(assignment, seat);
+  assignment.crews[crewIndex].seats[seatIndex] = null;
+  return seat;
+}
+
+/**
+ * Seat someone from the pool.
+ *
+ * Dropping onto a taken seat swaps: a coach aiming at an occupied seat means
+ * to put this person there, and the displaced rower reappears in the pool
+ * where they can be seen and moved somewhere else.
+ */
+function seatFromPool_(assignment, poolIndex, crewIndex, seatIndex) {
+  if (poolIndex < 0 || poolIndex >= assignment.unassigned.length) {
+    return null;
+  }
+  if (!seatExists_(assignment, crewIndex, seatIndex)) {
+    return null;
+  }
+
+  // Removed before anyone is put back, so the displaced rower's insertion
+  // cannot shift the pool index out from under us.
+  var incoming = assignment.unassigned[poolIndex];
+  assignment.unassigned.splice(poolIndex, 1);
+
+  var sitting = assignment.crews[crewIndex].seats[seatIndex];
+  if (sitting) {
+    intoPool_(assignment, sitting);
+  }
+  assignment.crews[crewIndex].seats[seatIndex] = incoming;
+  return incoming;
+}
+
+/**
+ * Move a rower between seats, in the same boat or a different one.
+ *
+ * A swap, so dropping onto a taken seat exchanges the two and dropping onto an
+ * empty one leaves the seat behind empty. The bowside/strokeside shuffle, and
+ * it never changes how many people are in a boat.
+ */
+function moveBetweenSeats_(assignment, fromCrew, fromSeat, toCrew, toSeat) {
+  if (fromCrew === toCrew && fromSeat === toSeat) {
+    return null;
+  }
+  if (!seatExists_(assignment, fromCrew, fromSeat)) {
+    return null;
+  }
+  if (!seatExists_(assignment, toCrew, toSeat)) {
+    return null;
+  }
+  var moved = assignment.crews[fromCrew].seats[fromSeat];
+  if (!moved) {
+    return null;
+  }
+
+  assignment.crews[fromCrew].seats[fromSeat] =
+    assignment.crews[toCrew].seats[toSeat];
+  assignment.crews[toCrew].seats[toSeat] = moved;
+  return moved;
+}
+
+/**
+ * Is this hull already out? A boat can only be on the water once, so it can
+ * only be in one crew. `exceptCrew` is the crew asking.
+ */
+function boatInUse_(assignment, name, exceptCrew) {
+  if (exceptCrew === undefined) {
+    exceptCrew = -1;
+  }
+  for (var i = 0; i < assignment.crews.length; i++) {
+    if (i === exceptCrew) {
+      continue;
+    }
+    if (assignment.crews[i].boat.name === name) {
+      return true;
+    }
+  }
+  return false;
+}
+
+/** The first boat in the inventory not already out, or -1 if they all are. */
+function firstFreeBoat_(assignment, inventory) {
+  for (var i = 0; i < inventory.length; i++) {
+    if (inventory[i].seats > 0 && !boatInUse_(assignment, inventory[i].name)) {
+      return i;
+    }
+  }
+  return -1;
+}
+
+function emptySeats_(count) {
+  var seats = [];
+  for (var i = 0; i < count; i++) {
+    seats.push(null);
+  }
+  return seats;
+}
+
+/** Put another boat on the water, all seats empty for the coach to fill. */
+function addCrew_(assignment, boat) {
+  if (boat.seats <= 0 || boatInUse_(assignment, boat.name)) {
+    return -1;
+  }
+  assignment.crews.push({ boat: boat, seats: emptySeats_(boat.seats) });
+  return assignment.crews.length - 1;
+}
+
+/** Take a boat off the water entirely. Its crew goes back to the pool. */
+function removeCrew_(assignment, crewIndex) {
+  if (crewIndex < 0 || crewIndex >= assignment.crews.length) {
+    return -1;
+  }
+  var freed = 0;
+  assignment.crews[crewIndex].seats.forEach(function (seat) {
+    if (seat) {
+      intoPool_(assignment, seat);
+      freed += 1;
+    }
+  });
+  assignment.crews.splice(crewIndex, 1);
+  return freed;
+}
+
+/**
+ * Fill one boat's empty seats from the pool, bow first.
+ *
+ * Anyone already sitting stays put: this tops a boat up rather than re-seating
+ * it, so a coach can place the two who must row together and let this find the
+ * rest. Unlike assign_ it will part-fill - the coach has already chosen this
+ * boat, so three in a four beats refusing.
+ *
+ * Only rowers who may take the hull are seated, so it can come back
+ * part-filled with people still in the pool: those are the ones the boat is
+ * too much for.
+ */
+function fillCrew_(assignment, crewIndex) {
+  if (crewIndex < 0 || crewIndex >= assignment.crews.length) {
+    return -1;
+  }
+
+  var crew = assignment.crews[crewIndex];
+  var seated = 0;
+  for (var seat = 0; seat < crew.seats.length; seat++) {
+    if (crew.seats[seat]) {
+      continue;
+    }
+    // The first in the pool who may take the boat, rather than simply the
+    // first: stepping over someone the hull is too demanding for is the whole
+    // point of the class.
+    var pick = -1;
+    for (var i = 0; i < assignment.unassigned.length; i++) {
+      if (mayRow_(assignment.unassigned[i], crew.boat)) {
+        pick = i;
+        break;
+      }
+    }
+    if (pick < 0) {
+      break;
+    }
+    crew.seats[seat] = assignment.unassigned[pick];
+    assignment.unassigned.splice(pick, 1);
+    seated += 1;
+  }
+  return seated;
+}
+
+/** Empty a boat but leave it on the water, ready to be filled again. */
+function clearCrew_(assignment, crewIndex) {
+  if (crewIndex < 0 || crewIndex >= assignment.crews.length) {
+    return -1;
+  }
+  var crew = assignment.crews[crewIndex];
+  var freed = 0;
+  for (var seat = 0; seat < crew.seats.length; seat++) {
+    if (crew.seats[seat]) {
+      intoPool_(assignment, crew.seats[seat]);
+      crew.seats[seat] = null;
+      freed += 1;
+    }
+  }
+  return freed;
+}
+
+/**
+ * Swap a crew into a different hull, keeping whoever fits where they are.
+ *
+ * A bigger boat gains empty seats at the stern. A smaller one loses the seats
+ * off the end, and anyone in them goes back to the pool - the seats that
+ * survive keep their rowers rather than everyone shuffling forward, because a
+ * seat number means something in a boat.
+ */
+function setBoat_(assignment, crewIndex, boat) {
+  if (crewIndex < 0 || crewIndex >= assignment.crews.length) {
+    return -1;
+  }
+  if (boat.seats <= 0 || boatInUse_(assignment, boat.name, crewIndex)) {
+    return -1;
+  }
+
+  var crew = assignment.crews[crewIndex];
+  var displaced = 0;
+  for (var seat = boat.seats; seat < crew.seats.length; seat++) {
+    if (crew.seats[seat]) {
+      intoPool_(assignment, crew.seats[seat]);
+      displaced += 1;
+    }
+  }
+
+  if (boat.seats < crew.seats.length) {
+    crew.seats.length = boat.seats;
+  } else {
+    while (crew.seats.length < boat.seats) {
+      crew.seats.push(null);
+    }
+  }
+  crew.boat = boat;
+  return displaced;
+}
+
+/**
+ * Fill the largest boats first, from whoever accepted and may take them.
+ *
+ * Two rules: nobody sits in a boat their level does not reach, and only launch
+ * a boat we can fill. Big boats first because a part-filled eight strands more
+ * people than a part-filled double. Within a boat the weakest eligible rowers
+ * go first, so someone who only just reaches this class is spent here and the
+ * stronger ones are still in the pool when the demanding hulls come round.
+ *
+ * Greedy rather than optimal - a boat skipped for want of one eligible rower
+ * is not backtracked over - but predictable, which matters more on a dock at
+ * seven in the morning. A coach who disagrees drags it.
+ *
+ * Every crew this returns is full. Seats only become empty afterwards.
+ */
+function assign_(session, boats) {
+  var result = { crews: [], unassigned: [] };
+
+  var usable = boats.filter(function (boat) {
+    return boat.seats > 0;
+  });
+  usable.sort(function (a, b) {
+    if (a.seats !== b.seats) {
+      return b.seats - a.seats;
+    }
+    return compareNames_(a.name, b.name);
+  });
+
+  var pool = session.accepted;
+  // Flags rather than a shrinking list: a rower one boat cannot take has to
+  // still be there, in their original place, for the next boat to look at.
+  var seated = pool.map(function () {
+    return false;
+  });
+
+  usable.forEach(function (boat) {
+    var eligible = [];
+    for (var i = 0; i < pool.length; i++) {
+      if (!seated[i] && mayRow_(pool[i], boat)) {
+        eligible.push(i);
+      }
+    }
+    if (eligible.length < boat.seats) {
+      return;
+    }
+
+    // Weakest first, keeping name order within a level. Array.sort is stable
+    // in V8 (guaranteed since ES2019), which is what std::stable_sort was for.
+    eligible.sort(function (a, b) {
+      return rowerRank_(pool[a]) - rowerRank_(pool[b]);
+    });
+
+    var chosen = eligible.slice(0, boat.seats);
+    // Numeric, not the default string sort - these are indices. Seated in pool
+    // order rather than the order picked: who is in the boat is a levels
+    // question, but the crew list a coach reads should be in name order.
+    chosen.sort(function (a, b) {
+      return a - b;
+    });
+
+    var crew = { boat: boat, seats: emptySeats_(boat.seats) };
+    for (var seat = 0; seat < boat.seats; seat++) {
+      crew.seats[seat] = pool[chosen[seat]];
+      seated[chosen[seat]] = true;
+    }
+    result.crews.push(crew);
+  });
+
+  for (var i = 0; i < pool.length; i++) {
+    if (!seated[i]) {
+      result.unassigned.push(pool[i]);
+    }
+  }
+  return result;
+}
+</script>

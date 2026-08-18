@@ -1,0 +1,884 @@
+<script>
+/**
+ * The Assignment pane: turning pointer events into calls on CrewsJs.
+ *
+ * There is no logic about rowing in here. Every edit is one call into the
+ * ported crews.h, and the page re-renders from the result - so what the coach
+ * sees is always the assignment itself rather than a copy of it that could
+ * drift.
+ */
+
+var APP = {
+  payload: null, // what uiLoadPayload returned
+  sessionIndex: -1,
+  assignment: null, // {crews, unassigned}
+  saving: false,
+
+  tab: 'assignment',
+  selectedRowerId: null,
+  filter: '',
+  // Levels changed here but not yet written to the sheet, keyed by name
+  // because that is what the Rowers tab is keyed on.
+  levelEdits: {},
+};
+
+// The drag in progress, or null. `moved` guards against a click being read as
+// a drag: nothing happens until the pointer has actually travelled.
+var DRAG = null;
+var DRAG_THRESHOLD = 4;
+
+function el(id) {
+  return document.getElementById(id);
+}
+
+function setStatus(text, isError) {
+  var node = el('status');
+  node.textContent = text || '';
+  node.className = isError ? 'status error' : 'status';
+}
+
+function session_() {
+  if (!APP.payload || APP.sessionIndex < 0) {
+    return null;
+  }
+  return APP.payload.sessions[APP.sessionIndex];
+}
+
+// ---------------------------------------------------------------- loading --
+
+function load() {
+  setStatus('Pulling from Spond...');
+  el('reload').disabled = true;
+  google.script.run
+    .withSuccessHandler(onLoaded)
+    .withFailureHandler(function (err) {
+      el('reload').disabled = false;
+      setStatus(err.message || String(err), true);
+    })
+    .uiLoadPayload();
+}
+
+function onLoaded(payload) {
+  APP.payload = payload;
+  el('reload').disabled = false;
+
+  var picker = el('session');
+  picker.innerHTML = '';
+  payload.sessions.forEach(function (s, i) {
+    var option = document.createElement('option');
+    option.value = String(i);
+    option.textContent = s.date + '  ' + s.heading + '  (' + s.counts.accepted + ' accepted)';
+    picker.appendChild(option);
+  });
+
+  if (!payload.sessions.length) {
+    setStatus(
+      'No upcoming sessions matched. Check eventTitleMatches in Config.gs, or ' +
+      'run listEventTitles to see what the events are called.',
+      true
+    );
+    APP.sessionIndex = -1;
+    render();
+    return;
+  }
+
+  selectSession(0);
+  setStatus(
+    payload.boats.length + ' boats available, ' + payload.rowers.length + ' rowers in the club.'
+  );
+}
+
+/** Everyone who accepted, in the pool, no boats out yet. */
+function selectSession(index) {
+  APP.sessionIndex = index;
+  var s = session_();
+  APP.assignment = { crews: [], unassigned: s ? s.accepted.slice() : [] };
+  render();
+}
+
+// ------------------------------------------------------------- the buttons --
+
+function doAssign() {
+  var s = session_();
+  if (!s) {
+    return;
+  }
+  APP.assignment = assign_(s, APP.payload.boats);
+  var seated = 0;
+  APP.assignment.crews.forEach(function (crew) {
+    seated += filled_(crew);
+  });
+  setStatus(
+    APP.assignment.crews.length + ' boats out, ' + seated + ' seated, ' +
+    APP.assignment.unassigned.length + ' in the pool.'
+  );
+  render();
+}
+
+function doAddBoat() {
+  var at = firstFreeBoat_(APP.assignment, APP.payload.boats);
+  if (at < 0) {
+    setStatus('Every boat in the inventory is already out.', true);
+    return;
+  }
+  var boat = APP.payload.boats[at];
+  addCrew_(APP.assignment, boat);
+  setStatus(boatLabel_(boat) + ' is on the water, all seats empty.');
+  render();
+}
+
+function doRemove(crewIndex) {
+  var name = APP.assignment.crews[crewIndex].boat.name;
+  var freed = removeCrew_(APP.assignment, crewIndex);
+  setStatus(
+    name + ' is off the water' +
+    (freed > 0 ? ', its ' + freed + ' rowers back in the pool.' : '.')
+  );
+  render();
+}
+
+function doFill(crewIndex) {
+  var crew = APP.assignment.crews[crewIndex];
+  var seated = fillCrew_(APP.assignment, crewIndex);
+  var empty = crew.seats.length - filled_(crew);
+
+  var message = seated === 0 ? 'Nobody was seated.' : 'Seated ' + seated + ' in ' + crew.boat.name + '.';
+  if (empty > 0) {
+    message += ' ' + empty + ' seat' + (empty === 1 ? '' : 's') + ' still empty';
+    // Distinguish "the pool ran out" from "the pool has people this hull is
+    // too much for" - they need different things done about them.
+    message += APP.assignment.unassigned.length
+      ? ' - nobody left in the pool is ' + (crew.boat['class'] || 'eligible') + ' or better.'
+      : ' - the pool is empty.';
+  }
+  setStatus(message);
+  render();
+}
+
+function doClear(crewIndex) {
+  var crew = APP.assignment.crews[crewIndex];
+  var freed = clearCrew_(APP.assignment, crewIndex);
+  setStatus(
+    crew.boat.name + ' is empty' + (freed > 0 ? ', its ' + freed + ' rowers back in the pool.' : '.')
+  );
+  render();
+}
+
+function doSetBoat(crewIndex, boatName) {
+  var boat = null;
+  APP.payload.boats.forEach(function (b) {
+    if (b.name === boatName) {
+      boat = b;
+    }
+  });
+  if (!boat) {
+    return;
+  }
+
+  var displaced = setBoat_(APP.assignment, crewIndex, boat);
+  if (displaced < 0) {
+    setStatus(boat.name + ' is already out with another crew.', true);
+    render();
+    return;
+  }
+  setStatus(
+    'Now rowing ' + boatLabel_(boat) +
+    (displaced > 0
+      ? '. ' + displaced + ' rower' + (displaced === 1 ? '' : 's') +
+        ' did not fit and went back to the pool.'
+      : '.')
+  );
+  render();
+}
+
+// ------------------------------------------------------------------ saving --
+
+function doSave() {
+  var s = session_();
+  if (!s || APP.saving) {
+    return;
+  }
+
+  var result = {
+    generated_at: APP.payload.generated_at,
+    session: { id: s.id, date: s.date, heading: s.heading, start: s.start },
+    crews: APP.assignment.crews.map(function (crew) {
+      return {
+        boat: crew.boat.name,
+        type: crew.boat.type,
+        'class': crew.boat['class'],
+        seats: crew.boat.seats,
+        // Occupied seats in seat order. A boat with a gap shows up on the tab
+        // as "Kaza (3/4 seats)" - the count comes from the boat, so a short
+        // crew is visible rather than silently renumbered.
+        rowers: crew.seats
+          .filter(function (seat) {
+            return !!seat;
+          })
+          .map(function (seat) {
+            return { id: seat.id, name: seat.name, level: seat.level };
+          }),
+      };
+    }),
+    unassigned: APP.assignment.unassigned.map(function (rower) {
+      return { id: rower.id, name: rower.name };
+    }),
+  };
+
+  APP.saving = true;
+  el('save').disabled = true;
+  setStatus('Saving to the "' + s.date + '" tab...');
+  google.script.run
+    .withSuccessHandler(function (message) {
+      APP.saving = false;
+      el('save').disabled = false;
+      setStatus(message);
+    })
+    .withFailureHandler(function (err) {
+      APP.saving = false;
+      el('save').disabled = false;
+      setStatus(err.message || String(err), true);
+    })
+    .uiSaveCrews(result);
+}
+
+// --------------------------------------------------------------- rendering --
+
+function render() {
+  renderCrews();
+  renderPool();
+  renderRoster();
+  renderDetails();
+  el('assign').disabled = !session_();
+  el('save').disabled = !session_() || APP.saving;
+  el('save-levels').disabled = !Object.keys(APP.levelEdits).length || APP.saving;
+}
+
+function showTab(name) {
+  APP.tab = name;
+  el('pane-assignment').className = name === 'assignment' ? '' : 'hidden';
+  el('pane-rowers').className = name === 'rowers' ? '' : 'hidden';
+  el('tab-assignment').className = name === 'assignment' ? 'tab active' : 'tab';
+  el('tab-rowers').className = name === 'rowers' ? 'tab active' : 'tab';
+}
+
+function renderCrews() {
+  var host = el('crews');
+  host.innerHTML = '';
+
+  if (!APP.assignment) {
+    return;
+  }
+
+  APP.assignment.crews.forEach(function (crew, crewIndex) {
+    var box = document.createElement('div');
+    box.className = 'crew';
+
+    var head = document.createElement('div');
+    head.className = 'crew-head';
+
+    // Every hull not already out with another crew, plus this crew's own.
+    var picker = document.createElement('select');
+    APP.payload.boats.forEach(function (boat) {
+      if (boat.name !== crew.boat.name && boatInUse_(APP.assignment, boat.name, crewIndex)) {
+        return;
+      }
+      var option = document.createElement('option');
+      option.value = boat.name;
+      option.textContent = boatLabel_(boat);
+      option.selected = boat.name === crew.boat.name;
+      picker.appendChild(option);
+    });
+    picker.onchange = function () {
+      doSetBoat(crewIndex, picker.value);
+    };
+    head.appendChild(picker);
+
+    head.appendChild(button_('-', 'Take this boat off the water', function () {
+      doRemove(crewIndex);
+    }));
+    head.appendChild(button_('assign', 'Fill this boat from the pool', function () {
+      doFill(crewIndex);
+    }));
+    head.appendChild(button_('clear', 'Empty this boat, keeping it out', function () {
+      doClear(crewIndex);
+    }));
+
+    var under = underClassed_(crew);
+    var note = document.createElement('div');
+    note.className = under ? 'crew-note bad' : 'crew-note';
+    note.textContent =
+      filled_(crew) + '/' + crew.seats.length + ' seats' +
+      (under ? '   ' + under + ' below class ' + crew.boat['class'] : '');
+    head.appendChild(note);
+    box.appendChild(head);
+
+    // Every seat, numbered bow to stern, whether or not anyone is in it.
+    crew.seats.forEach(function (rower, seatIndex) {
+      box.appendChild(seatRow_(crew, crewIndex, rower, seatIndex));
+    });
+
+    host.appendChild(box);
+  });
+
+  // The + is the only button in this pane before Assign crews, so a coach can
+  // build the whole session by hand if they would rather.
+  var add = button_('+ boat', 'Put the next free boat on the water', doAddBoat);
+  add.id = 'add';
+  host.appendChild(add);
+}
+
+function seatRow_(crew, crewIndex, rower, seatIndex) {
+  var row = document.createElement('div');
+  row.dataset.dropKind = 'seat';
+  row.dataset.crew = String(crewIndex);
+  row.dataset.seat = String(seatIndex);
+
+  var number = document.createElement('span');
+  number.className = 'num';
+  number.textContent = seatIndex + 1 + '.';
+  row.appendChild(number);
+
+  if (!rower) {
+    row.className = 'seat empty';
+    var dash = document.createElement('span');
+    dash.textContent = '--';
+    row.appendChild(dash);
+    return row;
+  }
+
+  var below = !mayRow_(rower, crew.boat);
+  row.className = below ? 'seat filled under' : 'seat filled';
+  row.dataset.dragKind = 'seat';
+
+  var name = document.createElement('span');
+  name.textContent = rower.name;
+  row.appendChild(name);
+
+  var level = document.createElement('span');
+  level.className = 'level';
+  level.textContent = (rower.level || '-') + (below ? '   below class' : '');
+  row.appendChild(level);
+
+  return row;
+}
+
+function renderPool() {
+  var host = el('pool');
+  host.innerHTML = '';
+  if (!APP.assignment) {
+    return;
+  }
+
+  if (!APP.assignment.unassigned.length) {
+    var note = document.createElement('div');
+    note.className = 'empty-note';
+    note.textContent = 'Nobody in the pool.';
+    host.appendChild(note);
+    return;
+  }
+
+  APP.assignment.unassigned.forEach(function (rower, poolIndex) {
+    var row = document.createElement('div');
+    row.className = 'pool-item';
+    row.dataset.dragKind = 'pool';
+    row.dataset.pool = String(poolIndex);
+
+    var name = document.createElement('span');
+    name.textContent = rower.name;
+    row.appendChild(name);
+
+    var level = document.createElement('span');
+    level.className = 'level';
+    level.textContent = rower.level || '-';
+    row.appendChild(level);
+
+    host.appendChild(row);
+  });
+}
+
+function button_(text, title, onClick) {
+  var b = document.createElement('button');
+  b.textContent = text;
+  b.title = title;
+  b.onclick = onClick;
+  return b;
+}
+
+// --------------------------------------------------------- the Rowers pane --
+
+/**
+ * The whole club, not just whoever accepted something.
+ *
+ * A rower who has signed up for nothing is exactly the one a coach might want
+ * to look up - which is why the payload carries the entire roster.
+ */
+function renderRoster() {
+  var host = el('roster');
+  host.innerHTML = '';
+  if (!APP.payload) {
+    return;
+  }
+
+  var needle = APP.filter.trim().toLowerCase();
+  var shown = 0;
+
+  APP.payload.rowers.forEach(function (rower) {
+    if (needle && rower.name.toLowerCase().indexOf(needle) === -1) {
+      return;
+    }
+    shown += 1;
+
+    var item = document.createElement('button');
+    var classes = ['roster-item'];
+    if (rower.id === APP.selectedRowerId) {
+      classes.push('selected');
+    }
+    if (APP.levelEdits[rower.name] !== undefined) {
+      classes.push('edited');
+    }
+    item.className = classes.join(' ');
+    item.onclick = function () {
+      APP.selectedRowerId = rower.id;
+      render();
+    };
+
+    var name = document.createElement('span');
+    name.textContent = rower.name;
+    item.appendChild(name);
+
+    var level = document.createElement('span');
+    level.className = 'level';
+    level.textContent = rower.level || '-';
+    item.appendChild(level);
+
+    host.appendChild(item);
+  });
+
+  if (!shown) {
+    var note = document.createElement('div');
+    note.className = 'empty-note';
+    note.textContent = needle ? 'Nobody matches "' + APP.filter + '".' : 'No rowers loaded.';
+    host.appendChild(note);
+  }
+}
+
+function selectedRower_() {
+  if (!APP.payload || !APP.selectedRowerId) {
+    return null;
+  }
+  var found = null;
+  APP.payload.rowers.forEach(function (rower) {
+    if (rower.id === APP.selectedRowerId) {
+      found = rower;
+    }
+  });
+  return found;
+}
+
+/** Which boat and seat this rower is in, or null if they are not in one. */
+function seatOf_(rowerId) {
+  if (!APP.assignment) {
+    return null;
+  }
+  var where = null;
+  APP.assignment.crews.forEach(function (crew) {
+    crew.seats.forEach(function (seat, seatIndex) {
+      if (seat && seat.id === rowerId) {
+        where = { boat: crew.boat, seat: seatIndex };
+      }
+    });
+  });
+  return where;
+}
+
+function renderDetails() {
+  var host = el('details');
+  host.innerHTML = '';
+
+  var rower = selectedRower_();
+  if (!rower) {
+    var note = document.createElement('div');
+    note.className = 'empty-note';
+    note.textContent = 'Pick someone on the left.';
+    host.appendChild(note);
+    return;
+  }
+
+  var name = document.createElement('div');
+  name.className = 'detail-name';
+  name.textContent = rower.name;
+  host.appendChild(name);
+
+  var id = document.createElement('div');
+  id.className = 'detail-id';
+  id.textContent = rower.id;
+  host.appendChild(id);
+
+  // The level. This is the only place in the app it can be changed, and the
+  // Rowers tab is the only place it lives.
+  var levelRow = document.createElement('div');
+  levelRow.className = 'detail-row';
+  var levelLabel = document.createElement('div');
+  levelLabel.className = 'detail-label';
+  levelLabel.textContent = 'Level';
+  levelRow.appendChild(levelLabel);
+
+  var picker = document.createElement('select');
+  var options = [{ value: '', text: 'not set' }];
+  LEVELS.forEach(function (level) {
+    options.push({ value: level, text: level });
+  });
+  options.forEach(function (option) {
+    var node = document.createElement('option');
+    node.value = option.value;
+    node.textContent = option.text;
+    node.selected = (rower.level || '') === option.value;
+    picker.appendChild(node);
+  });
+  picker.onchange = function () {
+    setLevel(rower.id, picker.value || null);
+  };
+  levelRow.appendChild(picker);
+  host.appendChild(levelRow);
+
+  if (APP.levelEdits[rower.name] !== undefined) {
+    var pending = document.createElement('div');
+    pending.className = 'detail-label';
+    pending.textContent = 'Changed here, not yet in the sheet.';
+    levelRow.appendChild(pending);
+  }
+
+  // Which of the loaded sessions they accepted.
+  var accepted = [];
+  APP.payload.sessions.forEach(function (session) {
+    session.accepted.forEach(function (entry) {
+      if (entry.id === rower.id) {
+        accepted.push(session.date + '  ' + session.heading);
+      }
+    });
+  });
+
+  var acceptedRow = document.createElement('div');
+  acceptedRow.className = 'detail-row';
+  var acceptedLabel = document.createElement('div');
+  acceptedLabel.className = 'detail-label';
+  acceptedLabel.textContent = 'Accepted';
+  acceptedRow.appendChild(acceptedLabel);
+  if (accepted.length) {
+    accepted.forEach(function (text) {
+      var line = document.createElement('div');
+      line.textContent = text;
+      acceptedRow.appendChild(line);
+    });
+  } else {
+    var none = document.createElement('div');
+    none.textContent = 'None of the loaded sessions.';
+    acceptedRow.appendChild(none);
+  }
+  host.appendChild(acceptedRow);
+
+  // Where they are in the current assignment, if anywhere.
+  var placeRow = document.createElement('div');
+  placeRow.className = 'detail-row';
+  var placeLabel = document.createElement('div');
+  placeLabel.className = 'detail-label';
+  placeLabel.textContent = 'In this session';
+  placeRow.appendChild(placeLabel);
+
+  var where = seatOf_(rower.id);
+  var text = document.createElement('div');
+  if (where) {
+    text.textContent = where.boat.name + ', seat ' + (where.seat + 1);
+    if (!mayRow_(rower, where.boat)) {
+      text.textContent += '   below class ' + where.boat['class'];
+    }
+  } else if (APP.assignment && inPool_(rower.id)) {
+    text.textContent = 'In the pool.';
+  } else {
+    text.textContent = 'Not in this session.';
+  }
+  placeRow.appendChild(text);
+  host.appendChild(placeRow);
+}
+
+function inPool_(rowerId) {
+  var found = false;
+  APP.assignment.unassigned.forEach(function (rower) {
+    if (rower.id === rowerId) {
+      found = true;
+    }
+  });
+  return found;
+}
+
+/**
+ * Change a level everywhere it appears.
+ *
+ * The payload repeats each rower's level on the roster and on every session's
+ * accepted list, so the solver never has to join the two. That means a change
+ * has to be written to all of them - and to whoever is currently sitting in a
+ * seat, so the new level takes effect on the very next Assign crews without a
+ * round trip through the sheet and a re-pull.
+ */
+function setLevel(rowerId, level) {
+  var name = null;
+
+  APP.payload.rowers.forEach(function (rower) {
+    if (rower.id === rowerId) {
+      rower.level = level;
+      name = rower.name;
+    }
+  });
+
+  APP.payload.sessions.forEach(function (session) {
+    session.accepted.forEach(function (entry) {
+      if (entry.id === rowerId) {
+        entry.level = level;
+      }
+    });
+  });
+
+  if (APP.assignment) {
+    APP.assignment.crews.forEach(function (crew) {
+      crew.seats.forEach(function (seat) {
+        if (seat && seat.id === rowerId) {
+          seat.level = level;
+        }
+      });
+    });
+    APP.assignment.unassigned.forEach(function (rower) {
+      if (rower.id === rowerId) {
+        rower.level = level;
+      }
+    });
+  }
+
+  if (name) {
+    APP.levelEdits[name] = level;
+    setStatus(
+      name + ' is now ' + (level || 'not set') +
+      '. Assign crews uses it immediately; Save levels puts it in the sheet.'
+    );
+  }
+  render();
+}
+
+function doSaveLevels() {
+  var edits = APP.levelEdits;
+  if (!Object.keys(edits).length || APP.saving) {
+    return;
+  }
+
+  APP.saving = true;
+  el('save-levels').disabled = true;
+  setStatus('Saving levels to the Rowers tab...');
+  google.script.run
+    .withSuccessHandler(function (message) {
+      APP.saving = false;
+      APP.levelEdits = {};
+      setStatus(message);
+      render();
+    })
+    .withFailureHandler(function (err) {
+      APP.saving = false;
+      setStatus(err.message || String(err), true);
+      render();
+    })
+    .uiSaveLevels(edits);
+}
+
+// ---------------------------------------------------------------- dragging --
+
+function onPointerDown(event) {
+  if (event.button !== 0) {
+    return;
+  }
+  var source = event.target.closest('[data-drag-kind]');
+  if (!source) {
+    return;
+  }
+
+  DRAG = {
+    kind: source.dataset.dragKind,
+    crew: source.dataset.crew === undefined ? -1 : parseInt(source.dataset.crew, 10),
+    seat: source.dataset.seat === undefined ? -1 : parseInt(source.dataset.seat, 10),
+    pool: source.dataset.pool === undefined ? -1 : parseInt(source.dataset.pool, 10),
+    label: source.firstChild && source.querySelector('span:not(.num):not(.level)')
+      ? source.querySelector('span:not(.num):not(.level)').textContent
+      : '',
+    startX: event.clientX,
+    startY: event.clientY,
+    moved: false,
+  };
+  // So the drag survives the pointer leaving the element it started on.
+  source.setPointerCapture(event.pointerId);
+  event.preventDefault();
+}
+
+function onPointerMove(event) {
+  if (!DRAG) {
+    return;
+  }
+  if (!DRAG.moved) {
+    var far =
+      Math.abs(event.clientX - DRAG.startX) > DRAG_THRESHOLD ||
+      Math.abs(event.clientY - DRAG.startY) > DRAG_THRESHOLD;
+    if (!far) {
+      return;
+    }
+    DRAG.moved = true;
+    var ghost = el('ghost');
+    ghost.textContent = DRAG.label;
+    ghost.classList.remove('hidden');
+  }
+
+  var ghostNode = el('ghost');
+  ghostNode.style.left = event.clientX + 12 + 'px';
+  ghostNode.style.top = event.clientY + 12 + 'px';
+
+  highlight_(dropTargetAt_(event.clientX, event.clientY));
+}
+
+function onPointerUp(event) {
+  if (!DRAG) {
+    return;
+  }
+  var drag = DRAG;
+  DRAG = null;
+  el('ghost').classList.add('hidden');
+  highlight_(null);
+
+  if (!drag.moved) {
+    return; // a click, not a drag
+  }
+
+  var target = dropTargetAt_(event.clientX, event.clientY);
+  if (!target) {
+    return; // dropped nowhere
+  }
+  applyDrop_(drag, target);
+}
+
+/** The drop target under these coordinates, or null. */
+function dropTargetAt_(x, y) {
+  var node = document.elementFromPoint(x, y);
+  if (!node) {
+    return null;
+  }
+  var seat = node.closest('[data-drop-kind="seat"]');
+  if (seat) {
+    return {
+      kind: 'seat',
+      node: seat,
+      crew: parseInt(seat.dataset.crew, 10),
+      seat: parseInt(seat.dataset.seat, 10),
+    };
+  }
+  // The whole pool pane is the target, so a coach can aim at the empty space
+  // below the names rather than at one of the rows.
+  var pool = node.closest('#pool-panel');
+  return pool ? { kind: 'pool', node: pool } : null;
+}
+
+function highlight_(target) {
+  var previous = document.querySelector('.drop');
+  if (previous) {
+    previous.classList.remove('drop');
+  }
+  if (target) {
+    target.node.classList.add('drop');
+  }
+}
+
+/**
+ * Every combination is a call into CrewsJs, and every one of them is a no-op
+ * if it does not make sense. The status line says what happened, including
+ * where a displaced rower went.
+ */
+function applyDrop_(drag, target) {
+  var a = APP.assignment;
+
+  if (drag.kind === 'pool' && target.kind === 'seat') {
+    var before = seatAt_(a, target.crew, target.seat);
+    var seated = seatFromPool_(a, drag.pool, target.crew, target.seat);
+    if (!seated) {
+      return;
+    }
+    var crew = a.crews[target.crew];
+    var message = seated.name + ' into ' + crew.boat.name + ' seat ' + (target.seat + 1);
+    if (before) {
+      message += ', ' + before.name + ' back to the pool';
+    }
+    if (!mayRow_(seated, crew.boat)) {
+      // Marked, not undone: a coach has reasons the sheet does not know about.
+      message += '. ' + seated.name + ' is ' + (seated.level || 'ungraded') +
+        ' and ' + crew.boat.name + ' is class ' + crew.boat['class'] + ' - allowed, but marked.';
+    }
+    setStatus(message + '.');
+    render();
+    return;
+  }
+
+  if (drag.kind === 'seat' && target.kind === 'pool') {
+    var moved = unseat_(a, drag.crew, drag.seat);
+    if (!moved) {
+      return;
+    }
+    setStatus(moved.name + ' out of seat ' + (drag.seat + 1) + ' and back in the pool.');
+    render();
+    return;
+  }
+
+  if (drag.kind === 'seat' && target.kind === 'seat') {
+    var displaced = seatAt_(a, target.crew, target.seat);
+    var swapped = moveBetweenSeats_(a, drag.crew, drag.seat, target.crew, target.seat);
+    if (!swapped) {
+      return;
+    }
+    var toCrew = a.crews[target.crew];
+    var text = swapped.name + ' to ' + toCrew.boat.name + ' seat ' + (target.seat + 1);
+    if (displaced) {
+      text += ', swapped with ' + displaced.name;
+    }
+    var flags = [];
+    if (!mayRow_(swapped, toCrew.boat)) {
+      flags.push(swapped.name + ' is below class ' + toCrew.boat['class']);
+    }
+    if (displaced && !mayRow_(displaced, a.crews[drag.crew].boat)) {
+      flags.push(displaced.name + ' is below class ' + a.crews[drag.crew].boat['class']);
+    }
+    setStatus(text + '.' + (flags.length ? ' ' + flags.join('; ') + ' - allowed, but marked.' : ''));
+    render();
+  }
+}
+
+// ------------------------------------------------------------------- start --
+
+window.addEventListener('DOMContentLoaded', function () {
+  el('session').onchange = function () {
+    selectSession(parseInt(el('session').value, 10));
+  };
+  el('assign').onclick = doAssign;
+  el('save').onclick = doSave;
+  el('reload').onclick = load;
+  el('save-levels').onclick = doSaveLevels;
+  el('tab-assignment').onclick = function () {
+    showTab('assignment');
+  };
+  el('tab-rowers').onclick = function () {
+    showTab('rowers');
+  };
+  el('filter').oninput = function () {
+    APP.filter = el('filter').value;
+    renderRoster();
+  };
+
+  document.addEventListener('pointerdown', onPointerDown);
+  document.addEventListener('pointermove', onPointerMove);
+  document.addEventListener('pointerup', onPointerUp);
+  document.addEventListener('pointercancel', onPointerUp);
+
+  load();
+});
+</script>

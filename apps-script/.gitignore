@@ -1,0 +1,5 @@
+# clasp writes the script id here. Not a secret, but machine-specific.
+.clasp.json
+
+# npm, if clasp is installed locally rather than globally
+node_modules/

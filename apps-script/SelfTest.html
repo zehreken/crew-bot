@@ -1,0 +1,413 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <?!= include('Styles') ?>
+    <style>
+      .line {
+        font-family: ui-monospace, Menlo, Consolas, monospace;
+        font-size: 13px;
+        padding: 1px 0;
+      }
+      .pass { color: var(--muted); }
+      .fail { color: var(--bad); font-weight: 600; }
+      .summary { margin-top: 12px; font-weight: 600; }
+    </style>
+  </head>
+  <body>
+    <h1>crew-bot self-test</h1>
+    <div class="bar">
+      <button id="live">Also run against the real data</button>
+    </div>
+    <div class="status" id="status"></div>
+    <div class="panel"><div id="out"></div></div>
+
+    <?!= include('CrewsJs') ?>
+
+    <script>
+      /**
+       * The crew logic's own checks - a port of crew-assign/src/selftest.cpp.
+       *
+       * It runs in the page, against the same CrewsJs the UI drives, so it
+       * verifies the real path rather than a parallel copy on the server.
+       *
+       * The property it defends is the one every hand edit can break: after
+       * any sequence of drags, each rower who accepted is in exactly one seat
+       * or in the pool - never lost, never duplicated. It is re-checked after
+       * each kind of edit.
+       */
+      var failures = 0;
+
+      function out_(text, ok) {
+        var line = document.createElement('div');
+        line.className = 'line ' + (ok ? 'pass' : 'fail');
+        line.textContent = text;
+        document.getElementById('out').appendChild(line);
+      }
+
+      function check_(condition, what) {
+        out_((condition ? 'PASS ' : 'FAIL ') + what, condition);
+        if (!condition) {
+          failures += 1;
+        }
+      }
+
+      function tRower_(id, name, level) {
+        return { id: id, name: name, level: level ? level : null };
+      }
+
+      function tBoat_(name, type, seats, weightKg, cls) {
+        var boatClass = cls ? cls : null;
+        return {
+          name: name,
+          type: type,
+          seats: seats,
+          weight_kg: weightKg,
+          'class': boatClass,
+          class_rank: classRank_(boatClass) || 0,
+        };
+      }
+
+      function tRowers_(count, level) {
+        var rowers = [];
+        for (var i = 0; i < count; i++) {
+          rowers.push(tRower_(String(i), 'Rower ' + i, level));
+        }
+        return rowers;
+      }
+
+      function checkEveryoneOnce_(assignment, expected, what) {
+        var seen = [];
+        assignment.crews.forEach(function (crew) {
+          crew.seats.forEach(function (seat) {
+            if (seat) {
+              seen.push(seat.id);
+            }
+          });
+        });
+        assignment.unassigned.forEach(function (rower) {
+          seen.push(rower.id);
+        });
+        seen.sort();
+
+        var duplicated = false;
+        for (var i = 1; i < seen.length; i++) {
+          if (seen[i] === seen[i - 1]) {
+            duplicated = true;
+          }
+        }
+        check_(!duplicated && seen.length === expected, what);
+      }
+
+      function runSelfTest() {
+        // --- the solver, deterministically ----------------------------------
+        (function () {
+          var session = { accepted: tRowers_(13, '') };
+          var boats = [
+            tBoat_('Four', '4x/4-', 4, 75, ''),
+            tBoat_('Eight', '8+', 8, 85, ''),
+            tBoat_('Double', '2x', 2, 70, ''),
+          ];
+          var a = assign_(session, boats);
+          check_(a.crews.length === 2, '13 rowers fill eight + four, double skipped');
+          check_(a.crews[0].boat.name === 'Eight', 'largest boat is filled first');
+          check_(a.crews[0].seats.length === 8, 'eight has 8 seats');
+          check_(filled_(a.crews[0]) === 8, 'all 8 of them are filled');
+          check_(a.unassigned.length === 1, '1 rower left over from 13');
+          checkEveryoneOnce_(a, 13, 'every rower is accounted for, exactly once');
+        })();
+
+        // --- taking a rower out of a boat -----------------------------------
+        (function () {
+          var a = assign_({ accepted: tRowers_(4, 'B') }, [tBoat_('Four', '4x/4-', 4, 75, 'B')]);
+          check_(a.crews.length === 1 && filled_(a.crews[0]) === 4, 'the four starts full');
+
+          var moved = unseat_(a, 0, 1);
+          check_(moved && moved.id === '1', 'unseat returns the rower who moved');
+          check_(a.crews[0].seats.length === 4, 'the boat still has 4 seats');
+          check_(filled_(a.crews[0]) === 3, 'one of them is now empty');
+          check_(!a.crews[0].seats[1], 'and it is the one vacated');
+          check_(a.crews[0].seats[2].id === '2', 'the rower behind stays in their own seat');
+          check_(a.unassigned.length === 1 && a.unassigned[0].id === '1', 'the rower is back in the pool');
+          checkEveryoneOnce_(a, 4, 'everyone is still in exactly one place after the move');
+
+          check_(!unseat_(a, 0, 1), 'an empty seat stays empty');
+          check_(!unseat_(a, 9, 0), 'an unknown boat is ignored');
+          check_(!unseat_(a, 0, 99), 'an unknown seat is ignored');
+          check_(a.unassigned.length === 1, 'and none of that touched the pool');
+
+          unseat_(a, 0, 0);
+          unseat_(a, 0, 2);
+          unseat_(a, 0, 3);
+          check_(a.crews.length === 1 && filled_(a.crews[0]) === 0, 'an emptied boat stays in the list with all seats free');
+          check_(a.unassigned.length === 4, 'everyone is back in the pool');
+          check_(compareNames_(a.unassigned[0].name, a.unassigned[3].name) < 0, 'the pool stays in name order');
+        })();
+
+        // --- putting a rower from the pool into a seat -----------------------
+        (function () {
+          var a = assign_({ accepted: tRowers_(5, 'B') }, [tBoat_('Four', '4x/4-', 4, 75, 'B')]);
+          check_(a.unassigned.length === 1 && a.unassigned[0].id === '4', 'one rower starts in the pool');
+
+          unseat_(a, 0, 2);
+          check_(a.unassigned.length === 2, 'two in the pool after taking one out');
+          var seated = seatFromPool_(a, 1, 0, 2);
+          check_(seated && seated.id === '4', 'seatFromPool returns the rower who sat down');
+          check_(a.crews[0].seats[2].id === '4', 'and they are in the seat aimed at');
+          check_(a.unassigned.length === 1 && a.unassigned[0].id === '2', 'the pool is down to the rower who was taken out');
+          check_(filled_(a.crews[0]) === 4, 'the four is full again');
+
+          var bumpedInto = seatFromPool_(a, 0, 0, 0);
+          check_(bumpedInto && bumpedInto.id === '2', 'the pool rower takes the occupied seat');
+          check_(a.crews[0].seats[0].id === '2', 'they are sitting in it');
+          check_(a.unassigned.length === 1 && a.unassigned[0].id === '0', 'and the rower who was there is back in the pool');
+          check_(filled_(a.crews[0]) === 4, 'the boat did not change size');
+
+          check_(!seatFromPool_(a, 9, 0, 0), 'an unknown pool index is ignored');
+          check_(!seatFromPool_(a, 0, 0, 99), 'an unknown seat is ignored');
+          check_(a.unassigned.length === 1, 'and neither touched the pool');
+          checkEveryoneOnce_(a, 5, 'everyone is still in exactly one place');
+        })();
+
+        // --- moving between seats -------------------------------------------
+        (function () {
+          var a = assign_({ accepted: tRowers_(6, 'B') }, [
+            tBoat_('Four', '4x/4-', 4, 75, 'B'),
+            tBoat_('Double', '2x', 2, 70, 'C'),
+          ]);
+
+          var swapped = moveBetweenSeats_(a, 0, 0, 0, 3);
+          check_(swapped && swapped.id === '0', 'moving within a boat returns the rower who moved');
+          check_(a.crews[0].seats[0].id === '3' && a.crews[0].seats[3].id === '0', 'the two seats swapped');
+
+          unseat_(a, 1, 0);
+          var crossed = moveBetweenSeats_(a, 0, 1, 1, 0);
+          check_(crossed && crossed.id === '1', 'a rower can move to another boat');
+          check_(a.crews[1].seats[0].id === '1', 'they arrive in the target seat');
+          check_(!a.crews[0].seats[1], 'and the seat they left is empty, not closed up');
+
+          check_(!moveBetweenSeats_(a, 0, 1, 0, 2), 'dragging an empty seat does nothing');
+          check_(!moveBetweenSeats_(a, 0, 0, 0, 0), 'dropping a seat on itself does nothing');
+          checkEveryoneOnce_(a, 6, 'nobody was duplicated or dropped by all that dragging');
+        })();
+
+        // --- adding, removing, clearing and swapping boats -------------------
+        (function () {
+          var accepted = tRowers_(8, 'AA');
+          var inventory = [
+            tBoat_('Four', '4x/4-', 4, 75, 'B'),
+            tBoat_('Double', '2x', 2, 70, 'C'),
+            tBoat_('Single', '1x', 1, 70, 'A'),
+            tBoat_('Eight', '8+', 8, 85, 'AA'),
+          ];
+          var a = { crews: [], unassigned: accepted.slice() };
+
+          check_(firstFreeBoat_(a, inventory) === 0, 'the first free boat is the first in the inventory');
+          check_(addCrew_(a, inventory[0]) === 0, 'adding returns the new index');
+          check_(a.crews.length === 1 && a.crews[0].seats.length === 4, 'the boat arrives with all its seats');
+          check_(filled_(a.crews[0]) === 0, 'and nobody in them');
+          check_(a.unassigned.length === 8, 'adding a boat seats nobody');
+
+          check_(addCrew_(a, inventory[0]) === -1, 'the same boat cannot be added twice');
+          check_(firstFreeBoat_(a, inventory) === 1, 'the next + skips the boat already out');
+          check_(addCrew_(a, inventory[1]) === 1, 'so the double goes out too');
+
+          for (var seat = 0; seat < 4; seat++) {
+            seatFromPool_(a, 0, 0, seat);
+          }
+          check_(filled_(a.crews[0]) === 4 && a.unassigned.length === 4, 'four rowers seated by hand');
+
+          check_(clearCrew_(a, 0) === 4, 'clear reports the crew it freed');
+          check_(a.crews.length === 2, 'the boat is still on the water');
+          check_(a.crews[0].seats.length === 4 && filled_(a.crews[0]) === 0, 'with all of its seats, all empty');
+          check_(a.unassigned.length === 8, 'and everyone is back in the pool');
+          check_(clearCrew_(a, 0) === 0, 'clearing an empty boat frees nobody');
+
+          check_(fillCrew_(a, 0) === 4, 'assigning a boat fills all its seats');
+          check_(filled_(a.crews[0]) === 4 && a.unassigned.length === 4, 'and takes exactly that many out of the pool');
+          check_(fillCrew_(a, 0) === 0, 'a full boat takes nobody');
+          check_(fillCrew_(a, 9) === -1, 'an unknown boat is a no-op');
+
+          unseat_(a, 0, 1);
+          var kept = a.crews[0].seats[0].id;
+          check_(fillCrew_(a, 0) === 1, 'it fills just the seat that opened');
+          check_(a.crews[0].seats[0].id === kept, 'the rest of the crew did not move');
+          check_(filled_(a.crews[0]) === 4, 'and the boat is full again');
+
+          (function () {
+            var part = { crews: [], unassigned: [tRower_('x', 'Only', 'AA'), tRower_('y', 'Two', 'AA')] };
+            addCrew_(part, inventory[0]);
+            check_(fillCrew_(part, 0) === 2, 'a four takes the only two in the pool');
+            check_(filled_(part.crews[0]) === 2, 'and launches part-crewed');
+            check_(part.unassigned.length === 0, 'with the pool emptied');
+            check_(fillCrew_(part, 0) === 0, 'and nothing left to add');
+          })();
+
+          clearCrew_(a, 0);
+          clearCrew_(a, 1);
+
+          for (var s2 = 0; s2 < 2; s2++) {
+            seatFromPool_(a, 0, 1, s2);
+          }
+          check_(removeCrew_(a, 1) === 2, 'remove reports the crew it freed');
+          check_(a.crews.length === 1 && a.crews[0].boat.name === 'Four', 'and the boat is gone from the list');
+          check_(a.unassigned.length === 8, 'with its crew back in the pool');
+          check_(removeCrew_(a, 9) === -1, 'removing an unknown boat is a no-op');
+          check_(clearCrew_(a, 9) === -1, 'so is clearing one');
+
+          for (var s3 = 0; s3 < 4; s3++) {
+            seatFromPool_(a, 0, 0, s3);
+          }
+          check_(setBoat_(a, 0, inventory[3]) === 0, 'moving up to an eight displaces nobody');
+          check_(a.crews[0].seats.length === 8 && filled_(a.crews[0]) === 4, 'the crew keeps its seats and the eight gains empty ones');
+          check_(a.crews[0].boat.name === 'Eight', 'and the boat is the new one');
+
+          var poolBefore = a.unassigned.length;
+          check_(setBoat_(a, 0, inventory[1]) === 2, 'moving down to a double displaces the two who do not fit');
+          check_(a.crews[0].seats.length === 2, 'the boat is a double now');
+          check_(filled_(a.crews[0]) === 2, 'with the first two seats kept');
+          check_(a.unassigned.length === poolBefore + 2, 'and the other two are in the pool');
+
+          addCrew_(a, inventory[0]);
+          check_(setBoat_(a, 1, inventory[1]) === -1, 'a boat already out is refused for another crew');
+          check_(setBoat_(a, 0, inventory[1]) === 0, 'but a crew may re-pick the boat it is already in');
+          checkEveryoneOnce_(a, 8, 'nobody was lost or duplicated by any of that');
+        })();
+
+        // --- a boat that cannot be filled must not launch half-crewed --------
+        (function () {
+          var a = assign_(
+            { accepted: [tRower_('1', 'A', ''), tRower_('2', 'B', ''), tRower_('3', 'C', '')] },
+            [tBoat_('Eight', '8+', 8, 85, ''), tBoat_('Double', '2x', 2, 70, '')]
+          );
+          check_(a.crews.length === 1 && a.crews[0].boat.name === 'Double', 'an eight is skipped when only 3 rowers turned up');
+          check_(a.unassigned.length === 1, 'the odd rower is left over, not seated');
+        })();
+
+        // --- no rowers at all -------------------------------------------------
+        (function () {
+          var a = assign_({ accepted: [] }, [tBoat_('Double', '2x', 2, 70, '')]);
+          check_(a.crews.length === 0 && a.unassigned.length === 0, 'empty session is safe');
+        })();
+
+        // --- the level rule ---------------------------------------------------
+        (function () {
+          var tub = tBoat_('Tub', '2x', 2, 70, 'C');
+          var shell = tBoat_('Shell', '2x', 2, 70, 'AA');
+          var unclassed = tBoat_('Unclassed', '2x', 2, 70, '');
+
+          check_(classRank_('C') === 1 && classRank_('AA') === 4, "a level's rank matches the boat class it is named after");
+          check_(classRank_(null) === null, 'an ungraded rower has no rank');
+          check_(rowerRank_(tRower_('1', 'Nobody', '')) === 1, 'but counts as C when it comes to boats');
+
+          check_(mayRow_(tRower_('1', 'Ungraded', ''), tub), 'an ungraded rower may take a C boat');
+          check_(!mayRow_(tRower_('1', 'Ungraded', ''), shell), 'but not an AA one');
+          check_(mayRow_(tRower_('1', 'Ungraded', ''), unclassed), 'an unclassed hull constrains nobody');
+          check_(mayRow_(tRower_('1', 'Strong', 'AA'), tub), 'a strong rower may still take an easy boat');
+          check_(mayRow_(tRower_('1', 'Exact', 'B'), tBoat_('B boat', '2x', 2, 70, 'B')), 'meeting the class exactly is enough');
+        })();
+
+        (function () {
+          var a = assign_({ accepted: tRowers_(4, '') }, [
+            tBoat_('Racer', '4x/4-', 4, 75, 'A'),
+            tBoat_('Tub', '4x/4-', 4, 75, 'C'),
+          ]);
+          check_(a.crews.length === 1 && a.crews[0].boat.name === 'Tub', 'four ungraded rowers get the C four, not the A one');
+          check_(a.unassigned.length === 0, 'and all four of them are in it');
+          check_(underClassed_(a.crews[0]) === 0, 'the solver never produces an under-classed crew');
+        })();
+
+        (function () {
+          var a = assign_(
+            {
+              accepted: [
+                tRower_('1', 'Ava', 'AA'),
+                tRower_('2', 'Axel', 'AA'),
+                tRower_('3', 'Cec', 'C'),
+                tRower_('4', 'Cyd', 'C'),
+              ],
+            },
+            [tBoat_('Alpha', '2x', 2, 70, 'C'), tBoat_('Zeta', '2x', 2, 70, 'AA')]
+          );
+          check_(a.crews.length === 2, 'both doubles go out');
+          check_(a.crews[0].seats[0].name === 'Cec' && a.crews[0].seats[1].name === 'Cyd', 'the C double takes the two C rowers');
+          check_(a.crews[1].seats[0].name === 'Ava' && a.crews[1].seats[1].name === 'Axel', 'leaving the AA double the two who can row it');
+          check_(a.unassigned.length === 0, 'nobody is left on the dock');
+          check_(compareNames_(a.crews[0].seats[0].name, a.crews[0].seats[1].name) < 0, 'and a crew is still seated in name order');
+        })();
+
+        (function () {
+          var a = assign_({ accepted: tRowers_(13, '') }, [
+            tBoat_('Four', '4x/4-', 4, 75, 'C'),
+            tBoat_('Eight', '8+', 8, 85, 'C'),
+            tBoat_('Double', '2x', 2, 70, 'C'),
+          ]);
+          check_(a.crews.length === 2 && a.crews[0].boat.name === 'Eight', '13 ungraded rowers fill the C eight and four as before');
+          check_(a.crews[0].seats[0].id === '0' && a.crews[0].seats[7].id === '7', 'in the order they arrived, since nothing sorts equal levels');
+          check_(a.unassigned.length === 1 && a.unassigned[0].id === '12', 'and the same rower is left over');
+        })();
+
+        (function () {
+          var a = { crews: [], unassigned: [tRower_('1', 'Ava', 'AA'), tRower_('2', 'Cec', 'C')] };
+          check_(addCrew_(a, tBoat_('Shell', '2x', 2, 70, 'AA')) === 0, 'the AA double goes out empty');
+          check_(fillCrew_(a, 0) === 1, 'filling it seats only the rower who may take it');
+          check_(a.crews[0].seats[0].name === 'Ava', 'and it is the AA one');
+          check_(a.unassigned.length === 1 && a.unassigned[0].name === 'Cec', 'the C rower stays in the pool');
+          check_(fillCrew_(a, 0) === 0, 'asking again seats nobody rather than looping');
+          check_(underClassed_(a.crews[0]) === 0, 'the half crew is legal');
+
+          var forced = seatFromPool_(a, 0, 0, 1);
+          check_(forced && forced.name === 'Cec', 'but a coach can still drag them in by hand');
+          check_(underClassed_(a.crews[0]) === 1, 'and that is what underClassed reports');
+          check_(filled_(a.crews[0]) === 2, 'with the boat full either way');
+        })();
+
+        summarise_();
+      }
+
+      function summarise_() {
+        var node = document.createElement('div');
+        node.className = 'summary ' + (failures ? 'fail' : 'pass');
+        node.textContent = failures === 0 ? 'All checks passed.' : failures + ' CHECK(S) FAILED.';
+        document.getElementById('out').appendChild(node);
+      }
+
+      /** The same solver against the club's real data, fetched from the server. */
+      function runLive() {
+        document.getElementById('status').textContent = 'Pulling from Spond...';
+        google.script.run
+          .withSuccessHandler(function (payload) {
+            document.getElementById('status').textContent = '';
+            out_('', true);
+            out_('--- against the real data ---', true);
+            check_(payload.sessions.length > 0, 'the real pull has at least one session');
+
+            payload.sessions.forEach(function (session) {
+              var a = assign_(session, payload.boats);
+              var seated = 0;
+              a.crews.forEach(function (crew) {
+                seated += filled_(crew);
+                check_(filled_(crew) === crew.boat.seats, session.date + ': ' + crew.boat.name + ' launches with every seat filled');
+                check_(underClassed_(crew) === 0, session.date + ': ' + crew.boat.name + ' has nobody below its class');
+              });
+              check_(
+                seated + a.unassigned.length === session.accepted.length,
+                session.date + ': all ' + session.accepted.length + ' who accepted are accounted for'
+              );
+              checkEveryoneOnce_(a, session.accepted.length, session.date + ': nobody is in two places');
+            });
+            summarise_();
+          })
+          .withFailureHandler(function (err) {
+            document.getElementById('status').textContent = err.message || String(err);
+          })
+          .uiLoadPayload();
+      }
+
+      window.addEventListener('DOMContentLoaded', function () {
+        document.getElementById('live').onclick = runLive;
+        runSelfTest();
+      });
+    </script>
+  </body>
+</html>

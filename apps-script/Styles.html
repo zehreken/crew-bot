@@ -1,0 +1,326 @@
+<style>
+  :root {
+    --bg: #f7f7f5;
+    --panel: #ffffff;
+    --ink: #1c1c1a;
+    --muted: #6b6b66;
+    --line: #dcdcd6;
+    --accent: #1f6f5c;
+    --accent-soft: #e4f0ec;
+    --bad: #a4302a;
+    --bad-soft: #fbeae9;
+    --drop: #cfe6de;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --panel: #1f2125;
+      --ink: #e9e9e4;
+      --muted: #9a9a93;
+      --line: #34363b;
+      --accent: #6fbfa6;
+      --accent-soft: #23342f;
+      --bad: #e88a83;
+      --bad-soft: #3a2422;
+      --drop: #2b4740;
+    }
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+
+  body {
+    margin: 0;
+    padding: 16px;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.45 -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    /* A drag that selects text underneath it looks broken. */
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  h1 {
+    font-size: 16px;
+    font-weight: 600;
+    margin: 0 0 12px;
+  }
+
+  .bar {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  select,
+  button {
+    font: inherit;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    cursor: pointer;
+  }
+
+  button:hover:not(:disabled) {
+    border-color: var(--accent);
+  }
+
+  button:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+  }
+
+  .status {
+    min-height: 20px;
+    margin-bottom: 12px;
+    color: var(--muted);
+    font-size: 13px;
+  }
+
+  .status.error {
+    color: var(--bad);
+  }
+
+  .columns {
+    display: grid;
+    grid-template-columns: minmax(0, 2fr) minmax(220px, 1fr);
+    gap: 16px;
+    align-items: start;
+  }
+
+  .tabs {
+    display: flex;
+    gap: 4px;
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 12px;
+  }
+
+  .tab {
+    border: none;
+    border-bottom: 2px solid transparent;
+    border-radius: 0;
+    background: none;
+    padding: 6px 12px;
+    color: var(--muted);
+  }
+
+  .tab:hover:not(.active) {
+    color: var(--ink);
+  }
+
+  .tab.active {
+    color: var(--ink);
+    border-bottom-color: var(--accent);
+    font-weight: 600;
+  }
+
+  input[type="search"] {
+    font: inherit;
+    color: var(--ink);
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 6px 10px;
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
+  #roster {
+    max-height: 60vh;
+    overflow-y: auto;
+  }
+
+  .roster-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    width: 100%;
+    text-align: left;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    padding: 5px 8px;
+    background: none;
+  }
+
+  .roster-item:hover {
+    background: var(--accent-soft);
+  }
+
+  .roster-item.selected {
+    background: var(--accent-soft);
+    border-color: var(--accent);
+  }
+
+  .roster-item.edited {
+    font-weight: 600;
+  }
+
+  .detail-name {
+    font-size: 15px;
+    font-weight: 600;
+    margin-bottom: 2px;
+  }
+
+  .detail-id {
+    font-family: ui-monospace, Menlo, Consolas, monospace;
+    font-size: 11px;
+    color: var(--muted);
+    word-break: break-all;
+    margin-bottom: 10px;
+  }
+
+  .detail-row {
+    margin-top: 10px;
+  }
+
+  .detail-label {
+    font-size: 12px;
+    color: var(--muted);
+    margin-bottom: 3px;
+  }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 12px;
+  }
+
+  .panel h2 {
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--muted);
+    margin: 0 0 10px;
+  }
+
+  .crew {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 10px;
+    margin-bottom: 10px;
+  }
+
+  .crew-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .crew-head select {
+    flex: 1 1 200px;
+    min-width: 0;
+  }
+
+  .crew-head button {
+    padding: 4px 9px;
+    font-size: 13px;
+  }
+
+  .crew-note {
+    flex-basis: 100%;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .crew-note.bad {
+    color: var(--bad);
+  }
+
+  .seat,
+  .pool-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 8px;
+    border: 1px solid transparent;
+    border-radius: 5px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .seat + .seat {
+    margin-top: 2px;
+  }
+
+  .seat .num {
+    color: var(--muted);
+    min-width: 1.6em;
+  }
+
+  .seat.filled,
+  .pool-item {
+    cursor: grab;
+    background: var(--accent-soft);
+  }
+
+  .seat.empty {
+    color: var(--muted);
+  }
+
+  .seat.under {
+    background: var(--bad-soft);
+    color: var(--bad);
+  }
+
+  .level {
+    margin-left: auto;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .seat.under .level {
+    color: var(--bad);
+  }
+
+  .drop {
+    border-color: var(--accent);
+    background: var(--drop);
+  }
+
+  #pool {
+    min-height: 120px;
+  }
+
+  .pool-item + .pool-item {
+    margin-top: 2px;
+  }
+
+  .empty-note {
+    color: var(--muted);
+    font-size: 13px;
+    padding: 4px 8px;
+  }
+
+  /* Follows the pointer during a drag. pointer-events:none so
+     elementFromPoint sees what is underneath rather than the ghost. */
+  #ghost {
+    position: fixed;
+    z-index: 50;
+    pointer-events: none;
+    padding: 5px 10px;
+    border-radius: 5px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 13px;
+    box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  }
+
+  .hidden {
+    display: none;
+  }
+</style>

@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top" />
+    <?!= include('Styles') ?>
+  </head>
+  <body>
+    <h1>crew-bot</h1>
+
+    <!-- Above the tabs, so they apply to both and a load error stays readable
+         whichever tab is open. -->
+    <div class="bar">
+      <button id="reload">Reload from Spond</button>
+    </div>
+    <div class="status" id="status">Loading...</div>
+
+    <div class="tabs">
+      <button id="tab-assignment" class="tab active">Assignment</button>
+      <button id="tab-rowers" class="tab">Rowers</button>
+    </div>
+
+    <div id="pane-assignment">
+      <div class="bar">
+        <select id="session"></select>
+        <button id="assign" class="primary" disabled>Assign crews</button>
+        <button id="save" disabled>Save crews</button>
+      </div>
+
+      <div class="columns">
+        <div class="panel">
+          <h2>Crews</h2>
+          <div id="crews"></div>
+        </div>
+
+        <!-- The whole panel is the drop target, not just the rows, so a rower
+             can be dropped on the empty space below the names. -->
+        <div class="panel" id="pool-panel">
+          <h2>Pool</h2>
+          <div id="pool"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="pane-rowers" class="hidden">
+      <div class="bar">
+        <input id="filter" type="search" placeholder="Filter by name" />
+        <button id="save-levels" disabled>Save levels</button>
+      </div>
+
+      <div class="columns">
+        <div class="panel">
+          <h2>The club</h2>
+          <div id="roster"></div>
+        </div>
+        <div class="panel">
+          <h2>Details</h2>
+          <div id="details"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="ghost" class="hidden"></div>
+
+    <?!= include('CrewsJs') ?>
+    <?!= include('AppJs') ?>
+  </body>
+</html>
