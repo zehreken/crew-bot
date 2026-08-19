@@ -14,6 +14,7 @@ from crew_bot.models import ACCEPTED, DECLINED, UNANSWERED, Snapshot
 from crew_bot.config import _as_titles
 from crew_bot.spond_client import (
     _find_group,
+    _subgroup_blocks,
     _normalise,
     _parse_timestamp,
     _rowers_from_group,
@@ -391,6 +392,109 @@ def test_levels_reach_the_snapshot_and_the_export():
     assert payload["rowers"][2]["level"] is None
     # And the level rides along on the accepted entries too.
     assert payload["sessions"][0]["accepted"][0]["level"] == "B"
+
+
+def make_subgrouped_group():
+    """A group shaped like the real one: overlapping subgroups, one a coach
+    made and never filled, and a member in a subgroup this login cannot see.
+
+    The subGroups list is deliberately in Spond's own order (creation order),
+    which is not alphabetical - that is the thing the sort has to fix.
+    """
+    return {
+        "id": "g1",
+        "name": "Rowing Club",
+        "subGroups": [
+            {"id": "s1", "name": "Grupp 1"},
+            {"id": "s9", "name": "Magelungen"},
+            {"id": "s2", "name": "Grupp 1a"},
+            {"id": "s0", "name": "Grupp 0"},
+        ],
+        "members": [
+            {"id": "m1", "firstName": "Bo", "lastName": "Dahl",
+             "subGroups": ["s1", "s9"]},
+            {"id": "m2", "firstName": "anna", "lastName": "Berg",
+             "subGroups": ["s1"]},
+            {"id": "m3", "firstName": "Cecilie", "lastName": "Voss",
+             "subGroups": []},
+            {"id": "m4", "firstName": "Dan", "lastName": "Ek",
+             "subGroups": ["hidden"]},
+            {"id": "m5", "firstName": "Eva", "lastName": "Falk",
+             "subGroups": ["hidden", "s2"]},
+        ],
+    }
+
+
+def test_subgroups_are_sorted_by_name_not_by_spond_order():
+    blocks, _ = _subgroup_blocks(make_subgrouped_group())
+    assert [name for name, _ in blocks] == [
+        "Grupp 0",
+        "Grupp 1",
+        "Grupp 1a",
+        "Magelungen",
+    ]
+
+
+def test_a_member_of_several_subgroups_is_listed_under_each():
+    blocks, _ = _subgroup_blocks(make_subgrouped_group())
+    named = dict(blocks)
+    assert "Bo Dahl" in named["Grupp 1"]
+    assert "Bo Dahl" in named["Magelungen"]
+
+
+def test_members_within_a_subgroup_sort_ignoring_case():
+    blocks, _ = _subgroup_blocks(make_subgrouped_group())
+    assert dict(blocks)["Grupp 1"] == ["anna Berg", "Bo Dahl"]
+
+
+def test_a_subgroup_nobody_is_in_is_kept_as_an_empty_block():
+    blocks, _ = _subgroup_blocks(make_subgrouped_group())
+    assert dict(blocks)["Grupp 0"] == []
+
+
+def test_a_member_in_no_visible_subgroup_is_unplaced_rather_than_dropped():
+    blocks, unplaced = _subgroup_blocks(make_subgrouped_group())
+    # Cecilie is in none at all; Dan is only in one this login cannot see.
+    assert unplaced == ["Cecilie Voss", "Dan Ek"]
+    # Eva is in a hidden subgroup too, but also in a visible one, so she is
+    # placed - listing her in both would show her twice on the tab.
+    assert "Eva Falk" not in unplaced
+    assert dict(blocks)["Grupp 1a"] == ["Eva Falk"]
+
+
+def test_every_member_reaches_the_tab_exactly_once_per_visible_subgroup():
+    group = make_subgrouped_group()
+    blocks, unplaced = _subgroup_blocks(group)
+    listed = [name for _, members in blocks for name in members] + unplaced
+    # Bo is in two visible subgroups, so 5 members produce 6 lines. Nobody is
+    # lost, which is the invariant that matters.
+    assert sorted(listed, key=str.lower) == sorted(
+        ["Bo Dahl", "Bo Dahl", "anna Berg", "Cecilie Voss", "Dan Ek", "Eva Falk"],
+        key=str.lower,
+    )
+
+
+def test_group_rows_are_rectangular_with_members_indented_under_their_group():
+    blocks, unplaced = _subgroup_blocks(make_subgrouped_group())
+    rows = sheets.groups_to_rows("Rowing Club", blocks, unplaced, "2026-08-19 10:04")
+
+    assert all(len(row) == 2 for row in rows)
+    assert rows[0] == ["Groups in Rowing Club", "Updated 2026-08-19 10:04"]
+
+    at = rows.index(["Grupp 1", "2 members"])
+    assert rows[at + 1] == ["  anna Berg", ""]
+    assert rows[at + 2] == ["  Bo Dahl", ""]
+    assert rows[at + 3] == ["", ""]
+
+    # The unplaced go last, so the tab reads as groups first, to-do after.
+    assert rows[-3] == ["Not in any group", "2 members"]
+    assert rows[-2:] == [["  Cecilie Voss", ""], ["  Dan Ek", ""]]
+
+
+def test_no_unplaced_block_when_everyone_is_in_a_group():
+    rows = sheets.groups_to_rows("Rowing Club", [("Grupp 1", ["Bo Dahl"])], [])
+    assert not any(row[0].startswith("Not in any group") for row in rows)
+    assert rows[-2] == ["  Bo Dahl", ""]
 
 
 def _snapshot() -> Snapshot:

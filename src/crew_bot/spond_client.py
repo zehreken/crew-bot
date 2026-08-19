@@ -159,6 +159,75 @@ async def list_subgroups(config: Config) -> list[tuple[str, int]]:
     return sorted(rows, key=lambda row: row[0])
 
 
+def _subgroup_blocks(group: dict) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """Split a group payload into ([(subgroup name, member names)], unplaced).
+
+    Pure, like `_rowers_from_group`, so the ordering and the unplaced rule can
+    be tested without a login.
+
+    Subgroups come back sorted by name, not in Spond's own order. Spond returns
+    them in the order they were created - for this club that puts 'Grupp 1a'
+    last, after 'Magelungen', which reads as a bug to anyone scrolling the tab.
+    Sorting also matches what `crew_bot subgroups` already prints.
+
+    A subgroup with no members is kept, as an empty block: it means the coach
+    made the group and has not filled it in, which is worth seeing. Dropping it
+    would look exactly like the group not existing.
+    """
+    members: dict[str, list[str]] = {
+        sub.get("id"): [] for sub in group.get("subGroups") or []
+    }
+    unplaced: list[str] = []
+    for member in group.get("members") or []:
+        rower = Rower(
+            id=member.get("id", ""),
+            first_name=member.get("firstName", ""),
+            last_name=member.get("lastName", ""),
+        )
+        # An id with no matching subgroup means a subgroup this login cannot
+        # see. `list_members` shows the raw id in that case; here there is no
+        # column to show it in, so such a member counts as unplaced - but only
+        # if none of their subgroups is visible, or they would be listed twice.
+        placed = [sid for sid in member.get("subGroups") or [] if sid in members]
+        for sub_id in placed:
+            members[sub_id].append(rower.full_name)
+        if not placed:
+            unplaced.append(rower.full_name)
+
+    def by_name(name: str) -> str:
+        return name.lower()
+
+    blocks = [
+        (sub.get("name", "?"), sorted(members[sub.get("id")], key=by_name))
+        for sub in group.get("subGroups") or []
+    ]
+    blocks.sort(key=lambda block: block[0].lower())
+    # Not deduplicated: two members really can share a name, and losing one of
+    # them is worse than showing the name twice. `rowers` warns about that case.
+    return blocks, sorted(unplaced, key=by_name)
+
+
+async def list_subgroup_members(
+    config: Config,
+) -> tuple[list[tuple[str, list[str]]], list[str]]:
+    """Each subgroup with the names of its members, plus anyone in none.
+
+    Both parts are wanted: a member in no subgroup has not been placed yet,
+    which is exactly the thing a coach reads this list to notice, so they get
+    their own block rather than being dropped.
+
+    Like `list_subgroups`, this rides on the group payload and costs no extra
+    request.
+    """
+    async with _session(config) as client:
+        groups = await client.get_groups()
+        if not groups:
+            raise SpondError("Spond returned no groups for this login.")
+        group = _find_group(groups, config.group_name)
+
+    return _subgroup_blocks(group)
+
+
 async def list_members(config: Config) -> list[tuple[str, list[str], dict[str, str]]]:
     """Every member of the configured group, with subgroups and custom fields.
 

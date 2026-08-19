@@ -187,6 +187,61 @@ def _cmd_rowers(config) -> int:
     return 0
 
 
+def _cmd_groups_tab(config) -> int:
+    """Rebuild the Groups tab: each Spond subgroup with its members under it.
+
+    Named `groups-tab` and not `groups` because `groups` already means the
+    other kind of group - the Spond group the whole tool points at, which you
+    list once while filling in config.toml. The club's own 'Grupp 1', 'Grupp 2'
+    are Spond *sub*groups, and they are what a coach means by a group.
+    """
+    require_login(config)
+    require_group(config)
+    require_sheets(config)
+
+    blocks, ungrouped = asyncio.run(spond_client.list_subgroup_members(config))
+    if not blocks and not ungrouped:
+        print(f"{config.group_name} has no subgroups and no members.")
+        return 0
+
+    updated = datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M")
+    client = sheets.get_client(config)
+    spreadsheet = client.open(config.spreadsheet_name)
+    written, created = sheets.write_groups(
+        spreadsheet,
+        title=config.groups_worksheet_name,
+        group_name=config.group_name,
+        blocks=blocks,
+        ungrouped=ungrouped,
+        updated=updated,
+        after=config.rowers_worksheet_name,
+    )
+
+    if created:
+        print(
+            f"Created the {config.groups_worksheet_name!r} tab next to "
+            f"{config.rowers_worksheet_name!r}."
+        )
+    print(
+        f"Wrote {len(blocks)} group(s) and {written} lines to "
+        f"{config.spreadsheet_name} / {config.groups_worksheet_name}.\n"
+    )
+    if blocks:
+        width = max(len(name) for name, _ in blocks)
+        for name, members in blocks:
+            count = len(members)
+            print(f"  {name:<{width}}  {count} member" + ("s" if count != 1 else ""))
+
+    # A rower can sit in several groups, so the block sizes deliberately do not
+    # add up to the roster. Say the roster size too, or the sum looks wrong.
+    placed = len({name for _, members in blocks for name in members})
+    print(f"\n{placed} of {placed + len(ungrouped)} members are in a group.")
+    if ungrouped:
+        print(f"{len(ungrouped)} are in none - they are listed at the bottom.")
+    print("The tab is replaced every run; anything typed into it is lost.")
+    return 0
+
+
 def _cmd_levels(config, source: str | None) -> int:
     require_sheets(config)
     path = Path(source) if source else config.export_path.parent / "rowers.json"
@@ -340,6 +395,11 @@ def build_parser() -> argparse.ArgumentParser:
         "rowers", help="create/update the Rowers tab from the Spond member list"
     )
 
+    subparsers.add_parser(
+        "groups-tab",
+        help="write the Groups tab: each Spond subgroup with its members",
+    )
+
     levels_cmd = subparsers.add_parser(
         "levels", help="push levels set in the crew app back to the Rowers tab"
     )
@@ -380,6 +440,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_boats(config)
         if args.command == "rowers":
             return _cmd_rowers(config)
+        if args.command == "groups-tab":
+            return _cmd_groups_tab(config)
         if args.command == "levels":
             return _cmd_levels(config, args.source)
         if args.command == "export":

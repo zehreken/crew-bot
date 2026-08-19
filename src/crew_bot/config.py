@@ -45,6 +45,7 @@ class Config:
     worksheet_name: str
     boats_worksheet_name: str
     rowers_worksheet_name: str
+    groups_worksheet_name: str
     export_path: Path
 
 
@@ -100,6 +101,9 @@ def load_config() -> Config:
         boats_worksheet_name=str(sheets_table.get("boats_worksheet_name", "Boats")),
         rowers_worksheet_name=str(
             sheets_table.get("rowers_worksheet_name", "Rowers")
+        ),
+        groups_worksheet_name=str(
+            sheets_table.get("groups_worksheet_name", "Groups")
         ),
         export_path=_resolve(
             str(raw.get("export", {}).get("path", "data/attendance.json"))

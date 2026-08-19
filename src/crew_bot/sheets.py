@@ -147,6 +147,99 @@ def write_crews(spreadsheet: gspread.Spreadsheet, payload: dict) -> tuple[str, i
     return title, sum(1 for r in rows if r[0].strip())
 
 
+def _member_count(count: int) -> str:
+    """'1 member' / '7 members', the same wording `crew_bot subgroups` prints."""
+    return f"{count} member" + ("s" if count != 1 else "")
+
+
+def groups_to_rows(
+    group_name: str,
+    blocks: list[tuple[str, list[str]]],
+    ungrouped: list[str],
+    updated: str = "",
+) -> list[list[str]]:
+    """Lay out the Spond subgroups as one block per group, members beneath.
+
+    Same shape as `crews_to_rows`, and for the same reason: this is read down a
+    phone screen at the boathouse, so it is a list with headings rather than a
+    wide table.
+
+    The banner says out loud that the tab is rebuilt from Spond. Boats and
+    Rowers sit next to it and are the opposite - things a coach types into -
+    and without the line there is nothing to tell them apart on screen.
+
+    Names repeat: Spond lets a rower sit in several subgroups at once, and the
+    club uses that (Grupp 3 and Hammarby Herråtta 2026 overlap heavily). A
+    reader must not take the blocks for a partition, hence the second line.
+    """
+    rows: list[list[str]] = [
+        [f"Groups in {group_name}", f"Updated {updated}" if updated else ""],
+        ["Rebuilt from Spond each run; a rower can be in several groups.", ""],
+        ["", ""],
+    ]
+
+    for name, members in blocks:
+        rows.append([name, _member_count(len(members))])
+        for member in members:
+            rows.append([f"  {member}", ""])
+        rows.append(["", ""])
+
+    if ungrouped:
+        # Last, and named rather than implied: a member in no group is the one
+        # thing on this tab that is a to-do rather than a fact.
+        rows.append(["Not in any group", _member_count(len(ungrouped))])
+        for member in ungrouped:
+            rows.append([f"  {member}", ""])
+
+    return rows
+
+
+def ensure_groups_tab(
+    spreadsheet: gspread.Spreadsheet, title: str, after: str = ""
+) -> tuple[gspread.Worksheet, bool]:
+    """Return the Groups tab, creating it just after `after` if it is absent.
+
+    Placing it next to the Rowers tab is deliberate: it is the same roster cut
+    a different way, and Google appends new tabs at the far right where it
+    would land past the dated crew tabs instead. An existing tab is never
+    moved - by then the coach has put it where they want it.
+    """
+    try:
+        return spreadsheet.worksheet(title), False
+    except WorksheetNotFound:
+        index = None
+        for worksheet in spreadsheet.worksheets():
+            if worksheet.title == after:
+                index = worksheet.index + 1
+                break
+        return (
+            spreadsheet.add_worksheet(title=title, rows=400, cols=2, index=index),
+            True,
+        )
+
+
+def write_groups(
+    spreadsheet: gspread.Spreadsheet,
+    title: str,
+    group_name: str,
+    blocks: list[tuple[str, list[str]]],
+    ungrouped: list[str],
+    updated: str = "",
+    after: str = "",
+) -> tuple[int, bool]:
+    """Replace the Groups tab. Returns (data rows written, tab was created).
+
+    Replaced wholesale rather than reconciled, because unlike Rowers there is
+    nothing here a coach owns: every cell comes from Spond, so re-running after
+    someone changes group in the app is the whole point.
+    """
+    worksheet, created = ensure_groups_tab(spreadsheet, title, after)
+    rows = groups_to_rows(group_name, blocks, ungrouped, updated)
+    worksheet.clear()
+    worksheet.update(values=rows, range_name="A1")
+    return sum(1 for row in rows if row[0].strip()), created
+
+
 def write_snapshot(worksheet: gspread.Worksheet, snapshot: Snapshot) -> int:
     """Replace the sheet contents. Returns the number of data rows written.
 
