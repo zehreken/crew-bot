@@ -4,8 +4,23 @@ Pulls the club's **open rowing sessions** and their sign-ups from Spond and writ
 them to a Google Sheet. Currently that means Monday, Thursday and Saturday rowing —
 configured in `config.toml`, see below.
 
-A later C++ layer will read this data to generate crews (boat assignments) for each
-session. This repo is currently just the Python half.
+> **This document describes the superseded half.** The version in use is the
+> Apps Script web app in [`apps-script/`](apps-script/README.md), which does
+> all of this on Google's servers with no laptop involved. What follows still
+> works and is still the clearest statement of the rules — it is what the web
+> app was ported from — but new work goes into `apps-script/`.
+>
+> One rule has since diverged, and it is the one this document says most about.
+> **The web app has no Rowers tab.** A rower's level there is derived from the
+> Spond groups they are in — Grupp 1 and 1a are C, 2 is B, 3 is A, 4 is AA, and
+> Grupp 0 goes in no boat at all — rather than typed into a sheet, and "no
+> level" means *no boat* there instead of *counts as C*. Everything below about
+> the Rowers tab and about ungraded rowers still describes the Python
+> accurately; it no longer describes what the coaches use.
+
+The Python CLI here pulls from Spond and writes the sheet; the C++ app in
+`crew-assign/` reads what it exports and turns a session's sign-ups into crews.
+The two share no code, only `data/attendance.json`.
 
 ## Setup
 
@@ -122,6 +137,7 @@ cell `A1` of the target tab.
 .\.venv\Scripts\python.exe -m crew_bot fetch            # pull and write to the sheet
 .\.venv\Scripts\python.exe -m crew_bot boats            # list the boat inventory
 .\.venv\Scripts\python.exe -m crew_bot rowers           # build/update the Rowers tab from Spond
+.\.venv\Scripts\python.exe -m crew_bot groups-tab       # write the Groups tab: each group and its members
 .\.venv\Scripts\python.exe -m crew_bot levels           # push levels set in the crew app back
 .\.venv\Scripts\python.exe -m crew_bot check-sheets     # verify Google credentials and sharing
 ```
@@ -230,6 +246,55 @@ tab and then pushed back:
 it never adds or removes rows, so the tab's own order and anything else you
 have typed there survive. Use `rowers` to add people; that is the command that
 knows about Spond.
+
+### The Groups tab
+
+Who is in which of the club's groups — Grupp 0 to Grupp 4, Magelungen,
+Hammarby Herråtta — read straight out of Spond.
+
+```powershell
+.\.venv\Scripts\python.exe -m crew_bot groups-tab
+```
+
+The command is `groups-tab`, not `groups`, because `groups` already means the
+*other* kind of group: the single Spond group the whole tool points at, which
+you list once while filling in `config.toml`. What the club calls a group is a
+Spond **subgroup**, and that is what this tab holds.
+
+One block per group, members underneath, sorted by name:
+
+```
+Groups in Hammarby Rodd      Updated 2026-08-19 01:38
+Rebuilt from Spond each run; a rower can be in several groups.
+
+Grupp 0                      6 members
+  Henrik Persson
+  ...
+
+Grupp 1                      56 members
+  ...
+```
+
+- **This tab is an output.** Boats and Rowers sit next to it and are the
+  opposite — things you type into — so the tab says so in its second line.
+  `groups-tab` replaces it wholesale every run, which is the point: it is how
+  you see a group change made in the Spond app. Anything typed here is lost.
+- **The blocks are not a partition.** Spond lets a rower sit in several
+  subgroups at once and the club uses that heavily, so the counts add up to
+  more than the roster and names repeat between blocks.
+- Groups are sorted **by name**, not in Spond's own order. Spond returns them
+  in the order they were created, which currently puts `Grupp 1a` last, after
+  `Magelungen`.
+- A group **nobody is in** still gets a block, showing `0 members`. It means
+  someone made the group and has not filled it in; dropping it would look the
+  same as the group not existing.
+- Anyone in **no** group is listed last under `Not in any group`. Right now
+  that is nobody, all 160 members are placed — but it is the one line on the
+  tab that is a to-do rather than a fact, so it goes at the bottom where it
+  will be noticed.
+- The tab is created **next to Rowers**, since it is the same roster cut a
+  different way. Google would otherwise append it past the dated crew tabs at
+  the far right. Move it wherever you like; an existing tab is never moved.
 
 ### Crew assignment, as it currently works
 
@@ -431,10 +496,10 @@ change to an attendance matrix (rowers as rows, sessions as columns). Only
 src/crew_bot/
   config.py        settings from config.toml + secrets from .env
   models.py        Rower / Session / Snapshot / Boat - the shared data model
-  spond_client.py  Spond login, event fetch, session title filter
+  spond_client.py  Spond login, event fetch, session title filter, subgroups
   boats.py         reads the Boats tab
   rowers.py        the Rowers tab: roster sync and rower levels
-  sheets.py        Google auth, attendance writer, crews writer
+  sheets.py        Google auth, attendance writer, crews writer, groups writer
   export.py        the JSON contract with the C++ app
   cli.py           argparse entry point
 tests/
