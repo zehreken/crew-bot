@@ -78,6 +78,22 @@ function buildPayload_(snapshot, boats) {
       };
     }),
 
+    // The club's own groups - Grupp 0 to Grupp 4, Magelungen, Hammarby
+    // Herråtta - with who is in each, and who is in none.
+    //
+    // Deliberately without a level per member, even though every other list
+    // here repeats one. The page reads the level off `rowers` by id as it
+    // draws the pane, so it cannot show a stale one - and since the pane only
+    // ever displays a level, there is nothing to keep a second copy in step
+    // with.
+    //
+    // Not in the Python's export.py, which has no page to feed. It is the one
+    // field of this payload with no counterpart in data/attendance.json.
+    groups: (snapshot.groups ? snapshot.groups.blocks : []).map(function (block) {
+      return { name: block.name, members: block.members };
+    }),
+    ungrouped: snapshot.groups ? snapshot.groups.unplaced : [],
+
     sessions: snapshot.sessions.map(function (session) {
       var accepted = Object.keys(session.responses)
         .filter(function (id) {
@@ -129,8 +145,9 @@ function buildPayload_(snapshot, boats) {
 function buildFullPayload_() {
   var spreadsheet = openSpreadsheet_();
   var boats = loadBoats_(spreadsheet);
-  var levels = loadLevels_(spreadsheet);
-  var snapshot = applyLevels_(pullSnapshot_(), levels);
+  // One sheet read, not two: levels come out of the Spond groups now, and
+  // those arrive inside the snapshot pullSnapshot_ has already fetched.
+  var snapshot = applyGroupLevels_(pullSnapshot_());
   return buildPayload_(snapshot, boats);
 }
 
@@ -153,14 +170,24 @@ function logPayload() {
     payload.sessions.length
   );
 
-  var graded = payload.rowers.filter(function (rower) {
-    return rower.level !== null;
-  }).length;
+  // What the group rule made of the real club. A big "no boat" number is
+  // Grupp 0 and expected. A big C number is worth a look: it is Grupp 1 and
+  // Grupp 1a, plus anyone in no mapped group at all, and the second kind is a
+  // gap in Spond rather than a judgement about a rower.
+  var byLevel = { 'no boat': 0 };
+  BOAT_CLASSES.forEach(function (letter) {
+    byLevel[letter] = 0;
+  });
+  payload.rowers.forEach(function (rower) {
+    byLevel[rower.level === null ? 'no boat' : rower.level] += 1;
+  });
   console.log(
-    '%s of %s rowers graded. Ungraded count as C, so until that number grows ' +
-    'every crew goes out in a C boat.',
-    graded,
-    payload.rowers.length
+    'Levels from the club groups: %s.',
+    Object.keys(byLevel)
+      .map(function (key) {
+        return byLevel[key] + ' ' + key;
+      })
+      .join(', ')
   );
 
   payload.sessions.forEach(function (session) {

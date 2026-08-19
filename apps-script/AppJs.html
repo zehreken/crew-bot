@@ -15,11 +15,7 @@ var APP = {
   saving: false,
 
   tab: 'assignment',
-  selectedRowerId: null,
-  filter: '',
-  // Levels changed here but not yet written to the sheet, keyed by name
-  // because that is what the Rowers tab is keyed on.
-  levelEdits: {},
+  groupFilter: '',
 };
 
 // The drag in progress, or null. `moved` guards against a click being read as
@@ -242,24 +238,117 @@ function doSave() {
     .uiSaveCrews(result);
 }
 
+// ----------------------------------------------------------- the message --
+
+/**
+ * The crews as plain text, for pasting into Spond.
+ *
+ * The only thing this app produces that the rowers themselves read, so it says
+ * just what a rower needs: which boat, which seat, and whether they are in one
+ * at all. No levels and no boat classes - those are the coach's working notes,
+ * and "no boat" beside somebody's name is not a thing to broadcast.
+ *
+ * Shaped like crewsToRows_ in Ui.gs deliberately. The message and the sheet
+ * tab are the same list, and a rower who sees both should see one answer.
+ */
+function messageText_() {
+  var s = session_();
+  if (!s || !APP.assignment || !APP.assignment.crews.length) {
+    return '';
+  }
+
+  var lines = [s.heading + '  ' + s.date, ''];
+
+  APP.assignment.crews.forEach(function (crew) {
+    var rowers = crew.seats.filter(function (seat) {
+      return !!seat;
+    });
+    var head = crew.boat.name + (crew.boat.type ? '  ' + crew.boat.type : '');
+    // Only when it is short. A full crew needs no arithmetic, and a gap is
+    // exactly what a coach wants to notice in the moment before sending.
+    if (rowers.length < crew.seats.length) {
+      head += '  (' + rowers.length + ' of ' + crew.seats.length + ' seats)';
+    }
+    lines.push(head);
+    rowers.forEach(function (rower, i) {
+      lines.push(i + 1 + '. ' + rower.name);
+    });
+    lines.push('');
+  });
+
+  if (APP.assignment.unassigned.length) {
+    // Named, not left out. Somebody who accepted and is not going out should
+    // hear it from the coach rather than work it out from an absence.
+    lines.push(
+      'Not in a boat: ' +
+        APP.assignment.unassigned
+          .map(function (rower) {
+            return rower.name;
+          })
+          .join(', ')
+    );
+  }
+
+  return lines.join('\n').replace(/\n+$/, '') + '\n';
+}
+
+function renderMessage() {
+  var box = el('message');
+  box.value = messageText_();
+  el('copy-message').disabled = !box.value;
+}
+
+/**
+ * Put the message on the clipboard.
+ *
+ * execCommand rather than navigator.clipboard: the page is served inside
+ * Google's sandboxed iframe, where the async clipboard API is blocked by
+ * permissions policy often enough not to be worth relying on. Either way the
+ * text is left selected, so Ctrl+C still works when this does not.
+ */
+function doCopyMessage() {
+  var box = el('message');
+  if (!box.value) {
+    return;
+  }
+  box.focus();
+  box.select();
+
+  var copied = false;
+  try {
+    copied = document.execCommand('copy');
+  } catch (err) {
+    copied = false;
+  }
+
+  setStatus(
+    copied
+      ? 'Message copied. Paste it into Spond.'
+      : 'Could not reach the clipboard - the message is selected, press Ctrl+C.',
+    !copied
+  );
+}
+
 // --------------------------------------------------------------- rendering --
 
 function render() {
   renderCrews();
   renderPool();
-  renderRoster();
-  renderDetails();
+  renderGroups();
+  renderMessage();
   el('assign').disabled = !session_();
   el('save').disabled = !session_() || APP.saving;
-  el('save-levels').disabled = !Object.keys(APP.levelEdits).length || APP.saving;
+  el('save-groups').disabled = !groups_().length || APP.saving;
 }
+
+var PANES = ['assignment', 'groups'];
 
 function showTab(name) {
   APP.tab = name;
-  el('pane-assignment').className = name === 'assignment' ? '' : 'hidden';
-  el('pane-rowers').className = name === 'rowers' ? '' : 'hidden';
-  el('tab-assignment').className = name === 'assignment' ? 'tab active' : 'tab';
-  el('tab-rowers').className = name === 'rowers' ? 'tab active' : 'tab';
+  PANES.forEach(function (pane) {
+    el('pane-' + pane).className = pane === name ? '' : 'hidden';
+    el('tab-' + pane).className = pane === name ? 'tab active' : 'tab';
+  });
 }
 
 function renderCrews() {
@@ -357,7 +446,10 @@ function seatRow_(crew, crewIndex, rower, seatIndex) {
 
   var level = document.createElement('span');
   level.className = 'level';
-  level.textContent = (rower.level || '-') + (below ? '   below class' : '');
+  // "no boat" already says everything; adding "below class" to it would be
+  // two ways of saying the same seat is wrong.
+  level.textContent =
+    levelLabel_(rower.level) + (below && rower.level ? '   below class' : '');
   row.appendChild(level);
 
   return row;
@@ -390,7 +482,7 @@ function renderPool() {
 
     var level = document.createElement('span');
     level.className = 'level';
-    level.textContent = rower.level || '-';
+    level.textContent = levelLabel_(rower.level);
     row.appendChild(level);
 
     host.appendChild(row);
@@ -405,278 +497,137 @@ function button_(text, title, onClick) {
   return b;
 }
 
-// --------------------------------------------------------- the Rowers pane --
+// ------------------------------------------------------------------ groups --
+
+function groups_() {
+  return (APP.payload && APP.payload.groups) || [];
+}
+
+function ungrouped_() {
+  return (APP.payload && APP.payload.ungrouped) || [];
+}
+
+/** "6 members", or "2 of 6" while a filter is hiding some of them. */
+function memberLabel_(shown, total, filtered) {
+  if (filtered) {
+    return shown + ' of ' + total;
+  }
+  return total + ' member' + (total === 1 ? '' : 's');
+}
 
 /**
- * The whole club, not just whoever accepted something.
+ * The club's groups, each with its members under it - the pane form of the
+ * Groups tab, and the same order: groups by name, then anyone in none.
  *
- * A rower who has signed up for nothing is exactly the one a coach might want
- * to look up - which is why the payload carries the entire roster.
+ * Read-only, and since the Rowers pane went it is also the only list of the
+ * whole club in the page. Spond owns which group a rower is in and there is no
+ * API here for changing that, so a wrong group is fixed in the Spond app and
+ * picked up by the next Reload. The one thing this pane writes is the tab.
+ *
+ * Levels are looked up off the roster by id at draw time rather than carried
+ * on each member, so the payload's group members stay a name and an id. They
+ * are shown, never set - and what they show is this pane's own content read
+ * back, because a level IS the best group a rower is in. Everyone in the
+ * Grupp 4 block reads AA, everyone in Grupp 0 reads "no boat", and the three
+ * leaders read AA in every block they appear in.
  */
-function renderRoster() {
-  var host = el('roster');
+function renderGroups() {
+  var host = el('groups');
   host.innerHTML = '';
   if (!APP.payload) {
     return;
   }
 
-  var needle = APP.filter.trim().toLowerCase();
-  var shown = 0;
-
+  var levels = {};
   APP.payload.rowers.forEach(function (rower) {
-    if (needle && rower.name.toLowerCase().indexOf(needle) === -1) {
+    levels[rower.id] = rower.level;
+  });
+
+  var needle = APP.groupFilter.trim().toLowerCase();
+  var blocks = groups_().slice();
+  var unplaced = ungrouped_();
+  if (unplaced.length) {
+    // Last, and named rather than implied: a member in no group is the one
+    // thing here that is a to-do rather than a fact. Same as the sheet tab.
+    blocks.push({ name: 'Not in any group', members: unplaced });
+  }
+
+  var shown = 0;
+  blocks.forEach(function (block) {
+    var members = block.members.filter(function (member) {
+      return !needle || member.name.toLowerCase().indexOf(needle) !== -1;
+    });
+    // A filter hides a group it empties, rather than leaving a row of headings
+    // behind. Unfiltered, an empty group stays: it means someone made it in
+    // Spond and has not filled it in, which is worth seeing.
+    if (needle && !members.length) {
       return;
     }
-    shown += 1;
+    shown += members.length;
 
-    var item = document.createElement('button');
-    var classes = ['roster-item'];
-    if (rower.id === APP.selectedRowerId) {
-      classes.push('selected');
-    }
-    if (APP.levelEdits[rower.name] !== undefined) {
-      classes.push('edited');
-    }
-    item.className = classes.join(' ');
-    item.onclick = function () {
-      APP.selectedRowerId = rower.id;
-      render();
-    };
+    var wrap = document.createElement('div');
+    wrap.className = 'group';
 
-    var name = document.createElement('span');
-    name.textContent = rower.name;
-    item.appendChild(name);
+    var head = document.createElement('div');
+    head.className = 'group-head';
+    var title = document.createElement('span');
+    title.textContent = block.name;
+    head.appendChild(title);
+    var count = document.createElement('span');
+    count.className = 'level';
+    count.textContent = memberLabel_(members.length, block.members.length, !!needle);
+    head.appendChild(count);
+    wrap.appendChild(head);
 
-    var level = document.createElement('span');
-    level.className = 'level';
-    level.textContent = rower.level || '-';
-    item.appendChild(level);
+    members.forEach(function (member) {
+      // A row rather than a button: with the Rowers pane gone there is nowhere
+      // for a click to go, and something that looks pressable but is not is
+      // worse than a plain line.
+      var item = document.createElement('div');
+      item.className = 'group-item';
 
-    host.appendChild(item);
+      var name = document.createElement('span');
+      name.textContent = member.name;
+      item.appendChild(name);
+
+      var level = document.createElement('span');
+      level.className = 'level';
+      level.textContent = levelLabel_(levels[member.id]);
+      item.appendChild(level);
+
+      wrap.appendChild(item);
+    });
+
+    host.appendChild(wrap);
   });
 
-  if (!shown) {
+  if (!blocks.length || (needle && !shown)) {
     var note = document.createElement('div');
     note.className = 'empty-note';
-    note.textContent = needle ? 'Nobody matches "' + APP.filter + '".' : 'No rowers loaded.';
+    note.textContent = blocks.length
+      ? 'Nobody matches "' + APP.groupFilter + '".'
+      : 'No groups loaded. Press "Reload from Spond".';
     host.appendChild(note);
   }
-}
-
-function selectedRower_() {
-  if (!APP.payload || !APP.selectedRowerId) {
-    return null;
-  }
-  var found = null;
-  APP.payload.rowers.forEach(function (rower) {
-    if (rower.id === APP.selectedRowerId) {
-      found = rower;
-    }
-  });
-  return found;
-}
-
-/** Which boat and seat this rower is in, or null if they are not in one. */
-function seatOf_(rowerId) {
-  if (!APP.assignment) {
-    return null;
-  }
-  var where = null;
-  APP.assignment.crews.forEach(function (crew) {
-    crew.seats.forEach(function (seat, seatIndex) {
-      if (seat && seat.id === rowerId) {
-        where = { boat: crew.boat, seat: seatIndex };
-      }
-    });
-  });
-  return where;
-}
-
-function renderDetails() {
-  var host = el('details');
-  host.innerHTML = '';
-
-  var rower = selectedRower_();
-  if (!rower) {
-    var note = document.createElement('div');
-    note.className = 'empty-note';
-    note.textContent = 'Pick someone on the left.';
-    host.appendChild(note);
-    return;
-  }
-
-  var name = document.createElement('div');
-  name.className = 'detail-name';
-  name.textContent = rower.name;
-  host.appendChild(name);
-
-  var id = document.createElement('div');
-  id.className = 'detail-id';
-  id.textContent = rower.id;
-  host.appendChild(id);
-
-  // The level. This is the only place in the app it can be changed, and the
-  // Rowers tab is the only place it lives.
-  var levelRow = document.createElement('div');
-  levelRow.className = 'detail-row';
-  var levelLabel = document.createElement('div');
-  levelLabel.className = 'detail-label';
-  levelLabel.textContent = 'Level';
-  levelRow.appendChild(levelLabel);
-
-  var picker = document.createElement('select');
-  var options = [{ value: '', text: 'not set' }];
-  LEVELS.forEach(function (level) {
-    options.push({ value: level, text: level });
-  });
-  options.forEach(function (option) {
-    var node = document.createElement('option');
-    node.value = option.value;
-    node.textContent = option.text;
-    node.selected = (rower.level || '') === option.value;
-    picker.appendChild(node);
-  });
-  picker.onchange = function () {
-    setLevel(rower.id, picker.value || null);
-  };
-  levelRow.appendChild(picker);
-  host.appendChild(levelRow);
-
-  if (APP.levelEdits[rower.name] !== undefined) {
-    var pending = document.createElement('div');
-    pending.className = 'detail-label';
-    pending.textContent = 'Changed here, not yet in the sheet.';
-    levelRow.appendChild(pending);
-  }
-
-  // Which of the loaded sessions they accepted.
-  var accepted = [];
-  APP.payload.sessions.forEach(function (session) {
-    session.accepted.forEach(function (entry) {
-      if (entry.id === rower.id) {
-        accepted.push(session.date + '  ' + session.heading);
-      }
-    });
-  });
-
-  var acceptedRow = document.createElement('div');
-  acceptedRow.className = 'detail-row';
-  var acceptedLabel = document.createElement('div');
-  acceptedLabel.className = 'detail-label';
-  acceptedLabel.textContent = 'Accepted';
-  acceptedRow.appendChild(acceptedLabel);
-  if (accepted.length) {
-    accepted.forEach(function (text) {
-      var line = document.createElement('div');
-      line.textContent = text;
-      acceptedRow.appendChild(line);
-    });
-  } else {
-    var none = document.createElement('div');
-    none.textContent = 'None of the loaded sessions.';
-    acceptedRow.appendChild(none);
-  }
-  host.appendChild(acceptedRow);
-
-  // Where they are in the current assignment, if anywhere.
-  var placeRow = document.createElement('div');
-  placeRow.className = 'detail-row';
-  var placeLabel = document.createElement('div');
-  placeLabel.className = 'detail-label';
-  placeLabel.textContent = 'In this session';
-  placeRow.appendChild(placeLabel);
-
-  var where = seatOf_(rower.id);
-  var text = document.createElement('div');
-  if (where) {
-    text.textContent = where.boat.name + ', seat ' + (where.seat + 1);
-    if (!mayRow_(rower, where.boat)) {
-      text.textContent += '   below class ' + where.boat['class'];
-    }
-  } else if (APP.assignment && inPool_(rower.id)) {
-    text.textContent = 'In the pool.';
-  } else {
-    text.textContent = 'Not in this session.';
-  }
-  placeRow.appendChild(text);
-  host.appendChild(placeRow);
-}
-
-function inPool_(rowerId) {
-  var found = false;
-  APP.assignment.unassigned.forEach(function (rower) {
-    if (rower.id === rowerId) {
-      found = true;
-    }
-  });
-  return found;
 }
 
 /**
- * Change a level everywhere it appears.
+ * Write the Groups tab from what is on screen.
  *
- * The payload repeats each rower's level on the roster and on every session's
- * accepted list, so the solver never has to join the two. That means a change
- * has to be written to all of them - and to whoever is currently sitting in a
- * seat, so the new level takes effect on the very next Assign crews without a
- * round trip through the sheet and a re-pull.
+ * What is on screen, not a fresh pull: the same rule the crews save follows.
+ * Reload from Spond is how you get newer data, and it is one button up.
  */
-function setLevel(rowerId, level) {
-  var name = null;
-
-  APP.payload.rowers.forEach(function (rower) {
-    if (rower.id === rowerId) {
-      rower.level = level;
-      name = rower.name;
-    }
-  });
-
-  APP.payload.sessions.forEach(function (session) {
-    session.accepted.forEach(function (entry) {
-      if (entry.id === rowerId) {
-        entry.level = level;
-      }
-    });
-  });
-
-  if (APP.assignment) {
-    APP.assignment.crews.forEach(function (crew) {
-      crew.seats.forEach(function (seat) {
-        if (seat && seat.id === rowerId) {
-          seat.level = level;
-        }
-      });
-    });
-    APP.assignment.unassigned.forEach(function (rower) {
-      if (rower.id === rowerId) {
-        rower.level = level;
-      }
-    });
-  }
-
-  if (name) {
-    APP.levelEdits[name] = level;
-    setStatus(
-      name + ' is now ' + (level || 'not set') +
-      '. Assign crews uses it immediately; Save levels puts it in the sheet.'
-    );
-  }
-  render();
-}
-
-function doSaveLevels() {
-  var edits = APP.levelEdits;
-  if (!Object.keys(edits).length || APP.saving) {
+function doSaveGroups() {
+  if (APP.saving || !groups_().length) {
     return;
   }
 
   APP.saving = true;
-  el('save-levels').disabled = true;
-  setStatus('Saving levels to the Rowers tab...');
+  el('save-groups').disabled = true;
+  setStatus('Writing the Groups tab...');
   google.script.run
     .withSuccessHandler(function (message) {
       APP.saving = false;
-      APP.levelEdits = {};
       setStatus(message);
       render();
     })
@@ -685,7 +636,7 @@ function doSaveLevels() {
       setStatus(err.message || String(err), true);
       render();
     })
-    .uiSaveLevels(edits);
+    .uiSaveGroups(groups_(), ungrouped_());
 }
 
 // ---------------------------------------------------------------- dragging --
@@ -862,16 +813,17 @@ window.addEventListener('DOMContentLoaded', function () {
   el('assign').onclick = doAssign;
   el('save').onclick = doSave;
   el('reload').onclick = load;
-  el('save-levels').onclick = doSaveLevels;
   el('tab-assignment').onclick = function () {
     showTab('assignment');
   };
-  el('tab-rowers').onclick = function () {
-    showTab('rowers');
+  el('tab-groups').onclick = function () {
+    showTab('groups');
   };
-  el('filter').oninput = function () {
-    APP.filter = el('filter').value;
-    renderRoster();
+  el('save-groups').onclick = doSaveGroups;
+  el('copy-message').onclick = doCopyMessage;
+  el('group-filter').oninput = function () {
+    APP.groupFilter = el('group-filter').value;
+    renderGroups();
   };
 
   document.addEventListener('pointerdown', onPointerDown);

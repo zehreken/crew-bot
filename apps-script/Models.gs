@@ -8,6 +8,9 @@
  * eligibility question the comparison "level >= class" rather than a table
  * mapping one set of letters onto another.
  *
+ * Where a level comes FROM is Levels.gs: the club's Spond groups, mapped by
+ * CONFIG.groupLevels. Nothing types a letter in any more.
+ *
  * The letters live here and nowhere else. If the club ever adds a class, this
  * is the single place it goes.
  */
@@ -16,6 +19,11 @@
 var BOAT_CLASSES = ['C', 'B', 'A', 'AA'];
 
 // Rower levels are the same scale, not a parallel one. See above.
+//
+// With one asymmetry: a rower's level may also be null, which means no boat at
+// all rather than the bottom of the scale. A boat's class is never null in
+// that sense - an unclassed hull is an unanswered question about the boat.
+// mayRow_ in CrewsJs.html is where those two zeros are told apart.
 var LEVELS = BOAT_CLASSES;
 
 /**
@@ -105,9 +113,11 @@ function cellAt_(row, index, name) {
 /**
  * Match names the way a person would: ignoring case and extra spaces.
  *
- * This is the key the Rowers tab is joined on. The name is the key because a
- * coach maintains that tab by hand and a 28-character Spond id is not
- * something anyone can check by eye.
+ * Used on the group names in CONFIG.groupLevels, which are typed into Spond by
+ * a person and would otherwise break the mapping on a stray capital. It was
+ * written for the Rowers tab, which was joined on name rather than on a
+ * 28-character Spond id nobody can check by eye; that tab is gone and this is
+ * the last thing left that needs it.
  */
 function nameKey_(name) {
   return String(name || '')

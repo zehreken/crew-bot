@@ -16,7 +16,7 @@
 
     <div class="tabs">
       <button id="tab-assignment" class="tab active">Assignment</button>
-      <button id="tab-rowers" class="tab">Rowers</button>
+      <button id="tab-groups" class="tab">Groups</button>
     </div>
 
     <div id="pane-assignment">
@@ -39,23 +39,43 @@
           <div id="pool"></div>
         </div>
       </div>
+
+      <!-- The crews as plain text. Rebuilt on every change, so what is in the
+           boats above is always what gets copied - which is why it sits below
+           them rather than above. -->
+      <div class="panel" id="message-panel">
+        <h2>Message</h2>
+        <p class="panel-note">
+          For pasting into Spond, so everyone knows which boat they are in.
+          Rewritten whenever the crews change, so copy it last.
+        </p>
+        <textarea id="message" rows="12" readonly></textarea>
+        <div class="bar">
+          <button id="copy-message" disabled>Copy</button>
+        </div>
+      </div>
     </div>
 
-    <div id="pane-rowers" class="hidden">
+    <!-- The club's own groups - Grupp 0 to Grupp 4, Magelungen, Hammarby
+         Herråtta - straight from Spond, and since the Rowers pane went, the
+         only list of the whole club in the page. Read-only: Spond owns who is
+         in which group, so this pane shows and writes, it never edits. -->
+    <div id="pane-groups" class="hidden">
       <div class="bar">
-        <input id="filter" type="search" placeholder="Filter by name" />
-        <button id="save-levels" disabled>Save levels</button>
+        <input id="group-filter" type="search" placeholder="Filter by name" />
+        <button id="save-groups">Write to sheet</button>
       </div>
 
-      <div class="columns">
-        <div class="panel">
-          <h2>The club</h2>
-          <div id="roster"></div>
-        </div>
-        <div class="panel">
-          <h2>Details</h2>
-          <div id="details"></div>
-        </div>
+      <div class="panel">
+        <h2>Groups</h2>
+        <p class="panel-note">
+          From Spond, as of the last load. A rower can be in several groups, so
+          the counts add up to more than the club. The level beside a name is
+          the best of those groups: Grupp 1 and 1a are C, 2 is B, 3 is A, 4 is
+          AA, and Grupp 0 goes in no boat. Change a group in Spond, then
+          Reload.
+        </p>
+        <div id="groups"></div>
       </div>
     </div>
 

@@ -1,5 +1,5 @@
 /**
- * The web app: serving the page, and the two calls it makes.
+ * The web app: serving the page, and the calls it makes back.
  *
  * Deliberately thin. The page loads once, does all its work in the browser,
  * and calls back only to save - a round trip is several hundred milliseconds,
@@ -118,73 +118,31 @@ function uiSaveCrews(result) {
 }
 
 /**
- * Put edited levels back into the Rowers tab - a port of update_levels in
- * rowers.py.
+ * Write the Groups tab from what the page is showing.
  *
- * Only the level cell of a row whose name is recognised is touched, so the
- * tab's own order and anything else a coach typed there survive. Names not in
- * the tab are ignored rather than appended - syncRowers is the thing that
- * knows about Spond and adds people.
+ * The same tab pullGroups writes, by the same function - the difference is
+ * only where the data came from. The page already has it from the load, so
+ * this writes rather than re-fetches, exactly as uiSaveCrews does. Pressing
+ * Reload from Spond first is how you get a fresher one.
  *
- * `levels` arrives as {name: level or null} straight from the page.
+ * `blocks` arrives as [{name, members: [{id, name}]}] straight from the
+ * payload, and `unplaced` the same shape.
  */
-function uiSaveLevels(levels) {
-  var spreadsheet = openSpreadsheet_();
-  var sheet = spreadsheet.getSheetByName(CONFIG.rowersWorksheetName);
-  if (!sheet) {
+function uiSaveGroups(blocks, unplaced) {
+  blocks = blocks || [];
+  unplaced = unplaced || [];
+  if (!blocks.length && !unplaced.length) {
     throw new Error(
-      'There is no "' + CONFIG.rowersWorksheetName + '" tab yet. Run ' +
-      'syncRowers first - that is the command that knows about Spond.'
+      'No groups to write. Press "Reload from Spond" first - if the club ' +
+      'really has no subgroups, there is nothing for this tab to hold.'
     );
   }
 
-  var wanted = {};
-  Object.keys(levels).forEach(function (name) {
-    wanted[nameKey_(name)] = levels[name] || '';
-  });
+  writeGroupsTab_(blocks, unplaced);
 
-  var rows = sheet.getDataRange().getValues();
-  if (!rows.length) {
-    throw new Error('The "' + CONFIG.rowersWorksheetName + '" tab is empty.');
-  }
-
-  var index = headerIndex_(rows[0]);
-  if (index.name === undefined) {
-    throw new Error('The Rowers tab has no name column to match against.');
-  }
-  var nameAt = index.name;
-  var levelAt = index.level === undefined ? rows[0].length : index.level;
-
-  var width = Math.max(rows[0].length, levelAt + 1);
-  var out = [];
-  var header = rows[0].slice();
-  while (header.length < width) {
-    header.push('');
-  }
-  if (index.level === undefined) {
-    header[levelAt] = 'Level';
-  }
-  out.push(header);
-
-  var changed = 0;
-  for (var i = 1; i < rows.length; i++) {
-    var row = rows[i].slice();
-    while (row.length < width) {
-      row.push('');
-    }
-    var name = String(row[nameAt] || '').trim();
-    if (name) {
-      var key = nameKey_(name);
-      if (wanted[key] !== undefined && row[levelAt] !== wanted[key]) {
-        row[levelAt] = wanted[key];
-        changed += 1;
-      }
-    }
-    out.push(row);
-  }
-
-  sheet.clear();
-  sheet.getRange(1, 1, out.length, width).setValues(out);
-
-  return changed === 1 ? 'Updated 1 level.' : 'Updated ' + changed + ' levels.';
+  var placed = placedCount_(blocks);
+  return (
+    'Wrote ' + blocks.length + ' groups and ' + (placed + unplaced.length) +
+    ' members to the "' + CONFIG.groupsWorksheetName + '" tab.'
+  );
 }

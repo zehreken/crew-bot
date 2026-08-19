@@ -275,5 +275,10 @@ function pullSnapshot_() {
     groupName: group.name || CONFIG.groupName,
     rowers: rowers,
     sessions: sessions,
+    // Which of the club's groups each member is in. Split here rather than in
+    // the caller because the raw subGroups arrays are the one thing this
+    // function throws away, and re-fetching the group to get them back would
+    // be a second login. See subgroupBlocks_ in Groups.gs.
+    groups: subgroupBlocks_(group),
   };
 }

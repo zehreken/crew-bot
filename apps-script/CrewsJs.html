@@ -44,16 +44,19 @@ function compareNames_(a, b) {
   return left > right ? 1 : 0;
 }
 
-// What an ungraded rower counts as: the bottom of the scale, C.
-//
-// Waving them through would make the rule mean nothing while the roster is
-// mostly ungraded, which is the state it starts in. A new rower gets the
-// stable trainers, and grading them is what unlocks the better hulls.
-var UNGRADED_RANK = 1;
-
+/**
+ * Where a rower sits on the scale: C -> 1 ... AA -> 4, and 0 for no level.
+ *
+ * 0 means no boat at all, and it is reached exactly one way: Grupp 0, no water
+ * experience. It used to mean "not graded yet" and counted as C, because the
+ * Rowers tab started out mostly blank and a rule that waved everyone through
+ * would have meant nothing. Levels come from the club's groups now, everyone
+ * has one, and a blank is no longer a gap in the bookkeeping - it is a
+ * decision somebody made.
+ */
 function rowerRank_(rower) {
   var rank = classRank_(rower ? rower.level : null);
-  return rank ? rank : UNGRADED_RANK;
+  return rank ? rank : 0;
 }
 
 function boatRank_(boat) {
@@ -67,9 +70,29 @@ function boatRank_(boat) {
  * One strong rower does not carry a crew into a better hull. An unclassed hull
  * constrains nobody - that is an unanswered question about the boat, not a
  * judgement that anyone may row it.
+ *
+ * The early return is what stops those two zeros meeting. A rower with no
+ * class and a boat with no class would otherwise compare 0 >= 0 and pass,
+ * which would put a Grupp 0 rower in the one kind of hull nobody has thought
+ * about yet - the exact opposite of what "no water experience" is for. The
+ * boat's zero is a missing answer; the rower's zero IS the answer.
  */
 function mayRow_(rower, boat) {
+  if (rowerRank_(rower) === 0) {
+    return false;
+  }
   return rowerRank_(rower) >= boatRank_(boat);
+}
+
+/**
+ * A level for a human to read: "B", or "no boat" when there is none.
+ *
+ * Not "-". A blank used to mean "nobody has graded them yet", which was worth
+ * saying quietly; it now means they are not going out, which is worth saying
+ * out loud in the pool where a coach is looking for someone to seat.
+ */
+function levelLabel_(level) {
+  return level ? level : 'no boat';
 }
 
 /** "Bajen  8+  85 kg  B" */

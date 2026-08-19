@@ -41,6 +41,12 @@ boats_worksheet_name = "Boats"
 # Run `python -m crew_bot rowers` to create it and keep it up to date.
 rowers_worksheet_name = "Rowers"
 
+# The tab listing each Spond subgroup with its members underneath. Unlike Boats
+# and Rowers this one is an output: `python -m crew_bot groups-tab` rebuilds it
+# from Spond wholesale, so nothing typed into it survives. It is created next to
+# the Rowers tab, which is the roster it breaks down.
+groups_worksheet_name = "Groups"
+
 [export]
 # Where `crew_bot export` writes the JSON the C++ crew app reads.
 path = "data/attendance.json"

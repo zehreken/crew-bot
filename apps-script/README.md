@@ -5,8 +5,9 @@ assigns crews in a web page, and the result goes back to the sheet. No computer
 of ours involved and no database — the sheet stays the database, as it always
 was.
 
-Nothing outside this folder is touched. The Python CLI in the rest of the repo
-keeps working exactly as it did.
+This is the version in use. The Python CLI and the C++ crew app in the rest of
+the repo are what it was ported from — superseded now, still runnable, and
+still the clearest statement of the rules when something here is unclear.
 
 ## Why it is built this way
 
@@ -37,10 +38,11 @@ Server side (`.gs`) — runs on Google's servers:
 | `Models.gs` | the C/B/A/AA scale and the small shared helpers |
 | `Spond.gs` | login, group lookup, event fetch, title filter |
 | `Boats.gs` | reads the Boats tab |
-| `Rowers.gs` | reads the Rowers tab, and the roster sync |
+| `Levels.gs` | works out each rower's level from the groups they are in |
+| `Groups.gs` | writes the Groups tab: each Spond subgroup and its members |
 | `Attendance.gs` | writes the Attendance tab |
 | `Export.gs` | assembles the payload the page reads |
-| `Ui.gs` | serves the page; loads the payload, saves crews and levels |
+| `Ui.gs` | serves the page; loads the payload, saves crews and groups |
 
 Client side (`.html`) — runs in the coach's browser:
 
@@ -49,7 +51,7 @@ Client side (`.html`) — runs in the coach's browser:
 | `Index.html` | the page |
 | `Styles.html` | the CSS |
 | `CrewsJs.html` | the assignment and every seat edit — no DOM in it |
-| `AppJs.html` | pointer events, rendering, the two server calls |
+| `AppJs.html` | pointer events, rendering, the calls back to the server |
 | `SelfTest.html` | the crew logic's own checks, as a page |
 
 File order does not matter — the `.gs` files share one global scope and nothing
@@ -95,8 +97,9 @@ payload turns a transient password into a permanent record of one.
 
 A dedicated Spond account is better than a personal login: member-level read
 access is all it needs, and it removes the password prompt from the flow
-entirely. Mute its notifications, and skip it when syncing the roster or it
-will appear in the Rowers tab as a rower.
+entirely. Mute its notifications, and leave it out of every **Grupp** in Spond
+— it will still show up in the Groups tab, but under a group that grants no
+boat it can never be put in one.
 
 ### 3. Check it from the editor
 
@@ -111,10 +114,20 @@ In the function dropdown, in order:
    `eventTitleMatches`. A filter matching nothing produces an empty tab rather
    than an error, so this is how you see what the events are called.
 3. **`listBoats`** — the inventory. Unclassed hulls print as `-`.
-4. **`syncRowers`** — build or update the Rowers tab from Spond's members. Only
-   ever appends; an existing level is never touched.
-5. **`pullAttendance`** — writes the Attendance tab.
-6. **`logPayload`** — the whole data layer in one call, as JSON.
+4. **`selfTestLevels`** — checks the group-to-class rule against the cases
+   that decided its shape, including the leaders who are in every group. Needs
+   no login and touches nothing; it is here because the rule lives server-side
+   where `?page=selftest` cannot reach it.
+5. **`pullGroups`** — writes the Groups tab: each of the club's groups
+   (Grupp 0 to Grupp 4, Magelungen, Hammarby Herråtta) with its members under
+   it. Named `pullGroups` and not `listGroups` because that one is taken by
+   step 1 — Spond's *group* is the club itself, and what a coach calls a group
+   is a Spond *subgroup*. Cheaper than `pullAttendance`: subgroups arrive
+   inside the group payload, so it is one login and one GET. The deployed page
+   writes the same tab from its Groups pane, so this one is really for
+   checking the setup before there is a deployment to check it from.
+6. **`pullAttendance`** — writes the Attendance tab.
+7. **`logPayload`** — the whole data layer in one call, as JSON.
 
 ### 4. Deploy the web app
 
@@ -148,10 +161,17 @@ code point the way Python's `sorted()` does rather than by locale. So point
 `SPREADSHEET_ID` at a copy of the sheet, run `pullAttendance` and `crew_bot
 fetch`, and diff the tabs.
 
+`pullGroups` and `crew_bot groups-tab` write the same tab from the same data,
+down to the sort: both order groups and members by lower-cased name, which is
+why `compareNamesIgnoringCase_` exists rather than a bare `localeCompare`. The
+tab is an output — replaced wholesale every run — so running either against one
+sheet gives the same result, in either order.
+
 `logPayload` prints the same JSON `crew_bot export` writes — snake_case keys
 and all, kept that way purely so it can be diffed against a real
-`data/attendance.json`. Once the Python side is retired, that is the moment to
-rename them.
+`data/attendance.json` during the port. That was their whole purpose, and with
+the Python superseded there is nothing left to diff against: renaming them to
+camelCase is now free whenever it is convenient.
 
 ## The crew logic
 
@@ -174,36 +194,136 @@ Rower with a blank id, and the edits return `null` instead of an empty Rower
 when nothing moved.
 
 Dragging is never refused on level grounds. A coach can put anyone in any boat —
-they have reasons the sheet does not know about — but the seat turns red, the
+they have reasons Spond does not know about — but the seat turns red, the
 boat's header counts how many are below class, and the status line spells out
-what was overridden. Marked, not undone.
+what was overridden. Marked, not undone. That holds for a Grupp 0 rower too:
+the solver will never seat one, and a coach who drags one in gets a red seat
+rather than a refusal.
+
+## The message
+
+Under the crews, a plain-text box holding the same crews as a message a coach
+can paste into Spond. It is rewritten on every change — every drag, every
+Assign crews, every boat swapped — so it always matches the boats above it,
+which is why it sits below them rather than at the top of the pane. **Copy** it
+last.
+
+It says only what a rower needs: the session, which boat, which seat, and
+whether they are in one at all. No levels and no boat classes — those are the
+coach's working notes, and "no boat" beside somebody's name is not a thing to
+broadcast to the club. Anyone who accepted and did not get a seat *is* listed,
+on a **Not in a boat** line: that is something they need to hear rather than
+infer from an absence.
+
+```
+Thursday rowing  2026-08-20
+
+Bajen  8+
+1. Anna Andersson
+2. Bo Berg
+...
+
+Kaza  4x/4-  (3 of 4 seats)
+1. Ivar Isak
+2. Josefin Ju
+3. Karl Krok
+
+Not in a boat: Lisa Lund, Mats Mo
+```
+
+The seat count only appears on a boat that is not full, so a normal crew reads
+clean and a short one stands out before it is sent. Occupied seats are
+renumbered from 1, the same as the sheet tab — a rower reading both sees one
+answer, and the pair "3 of 4" plus three names says everything about the gap.
+
+**Copy** uses `execCommand` rather than the async clipboard API, which
+Google's sandboxed iframe blocks often enough not to rely on. If it fails the
+text is left selected, so Ctrl+C still works; the status line says which
+happened. The box is read-only: it is regenerated constantly, so an edit made
+in it would not survive the next drag. Edit in Spond after pasting.
+
+## How a rower's level is decided
+
+**A rower's level is the best class among the groups they are in.** The mapping
+is `groupLevels` in `Config.gs`; the rule and its edge cases are `Levels.gs`.
+
+| group | level | may row |
+|---|---|---|
+| Grupp 0 | — | nothing at all |
+| Grupp 1, Grupp 1a | C | C |
+| Grupp 2 | B | C, B |
+| Grupp 3 | A | C, B, A |
+| Grupp 4 | AA | anything |
+| Magelungen, Hammarby Herråtta | — | (contributes nothing) |
+
+There used to be a **Rowers** tab holding a hand-typed letter per rower. It is
+gone, along with `Rowers.gs`, `syncRowers`, `uiSaveLevels` and the level picker
+in the page. The club already sorts its rowers into groups in Spond and already
+keeps that current, because it is how sessions get invited; the letters were a
+second copy of the same judgement, kept worse. Grading someone now means moving
+them a group in the Spond app and pressing **Reload from Spond**.
+
+Three cases the table above cannot state on its own:
+
+- **Best, not only.** Three rowers — the leaders — are in every group. Taking
+  the maximum is the only reading under which they come out AA instead of being
+  demoted by their Grupp 0 membership.
+- **Grupp 0 is off the scale, not the bottom of it.** No water experience means
+  no boat, *including an unclassed one*. That needs saying because an unclassed
+  hull otherwise constrains nobody: its rank is 0 as well, and `0 >= 0` would
+  quietly pass. `mayRow_` in `CrewsJs.html` has an explicit early return for it.
+  The boat's zero is a missing answer; the rower's zero is the answer.
+- **A rower in no mapped group counts as C.** Only Magelungen, say, or in a
+  subgroup this login cannot see. Nobody should be stuck on the dock over a gap
+  in Spond bookkeeping, and C is the stable trainer. Grupp 0 is treated
+  differently because it is not a gap — somebody put them there. Watch the
+  level breakdown `logPayload` prints: a C count much larger than Grupp 1 and
+  1a together is the sign of members nobody has grouped.
+
+Renaming a group in Spond — "Hammarby Herråtta 2027" — silently drops it out of
+the mapping, which for that one is harmless and for a **Grupp** would demote
+everybody in it to C. Run `pullGroups` to see the names exactly as Spond has
+them, and keep `groupLevels` in step. Spelling is matched ignoring case and
+extra spaces, so only a real rename matters.
 
 Pressing **Assign crews** again re-solves from scratch and throws away every
 hand edit. That is the undo.
 
-## The Rowers pane
+## The Groups pane
 
-The whole club, not just whoever accepted something — a rower who has signed up
-for nothing is exactly the one a coach might want to look up. Picking someone
-shows their Spond id, their level, which of the loaded sessions they accepted,
-and where they are in the current assignment.
+Which of the club's groups — Grupp 0 to Grupp 4, Magelungen, Hammarby
+Herråtta — each rower is in, straight from Spond, with their level beside them.
+One block per group, members underneath, then anyone in no group at all.
 
-Levels can be set here or by typing in the sheet; this is the only place in the
-app that changes one, and the Rowers tab is the only place a level lives.
+Since the Rowers pane was dropped this is also the only list of the whole club
+in the page, which is what it was kept for: the same 160 people, sorted into
+the groups a coach actually thinks in rather than one flat alphabet.
 
-A level set here **takes effect immediately for the boats**: press Assign crews
-after grading someone and the new level is what decides which hulls they can
-take, with no round trip through the sheet and no re-pull. That works because
-`setLevel` writes the change everywhere the payload repeats it — the roster,
-every session's accepted list, and whoever is currently sitting in a seat.
+**Read-only, deliberately.** Spond owns which group a rower is in and there is
+no call here that changes that, so a wrong group is fixed in the Spond app and
+picked up by the next **Reload from Spond**. Nothing in this pane is editable,
+which is why the member rows are plain rows and not buttons.
 
-**Save levels** writes them to the Rowers tab. Only the level cell of a row
-whose name is recognised is touched, so the tab's own order and anything else
-typed there survive. A name the tab has never heard of is ignored rather than
-appended — `syncRowers` is the thing that knows about Spond and adds people, so
-if a level does not stick, run that first.
+Two things follow from a rower being allowed in several groups at once, which
+this club uses heavily:
 
-Unsaved changes show in bold in the list, and the details panel says so.
+- the counts add up to more than the roster, and a name appears in more than
+  one block — the blocks are not a partition, and the pane says so;
+- **Not in any group** at the bottom is the one block that is a to-do rather
+  than a fact. It is empty today: all 160 members are placed.
+
+The level beside each name is this pane's own content read back: it *is* the
+best group that rower is in. Everyone in the Grupp 4 block reads AA, everyone
+in Grupp 0 reads "no boat", and the leaders read AA in every block they appear
+in. Nothing here sets a level, because moving somebody between the blocks is
+what setting one means — and that happens in the Spond app.
+
+**Write to sheet** writes the Groups tab, next to Boats. It writes what is on
+screen rather than re-fetching, the same rule **Save crews** follows; Reload
+from Spond is how you get newer data, and it is one button up. The tab is
+replaced wholesale every run, so nothing typed into it survives — it is an
+output, unlike the Boats tab beside it. It is worth writing after a grouping
+change anyway: it is the sheet's record of why anyone got the boat they got.
 
 ## Keeping it in git
 
@@ -216,5 +336,5 @@ clasp login
 clasp clone <script id>   # from Project Settings -> Script ID
 ```
 
-With fourteen files, hand-copying is now the most likely source of a bug —
+With fifteen files, hand-copying is the most likely source of a bug —
 `clasp push` is worth the ten minutes.

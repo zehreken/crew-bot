@@ -102,7 +102,7 @@
       function runSelfTest() {
         // --- the solver, deterministically ----------------------------------
         (function () {
-          var session = { accepted: tRowers_(13, '') };
+          var session = { accepted: tRowers_(13, 'C') };
           var boats = [
             tBoat_('Four', '4x/4-', 4, 75, ''),
             tBoat_('Eight', '8+', 8, 85, ''),
@@ -277,7 +277,7 @@
         // --- a boat that cannot be filled must not launch half-crewed --------
         (function () {
           var a = assign_(
-            { accepted: [tRower_('1', 'A', ''), tRower_('2', 'B', ''), tRower_('3', 'C', '')] },
+            { accepted: [tRower_('1', 'A', 'C'), tRower_('2', 'B', 'C'), tRower_('3', 'C', 'C')] },
             [tBoat_('Eight', '8+', 8, 85, ''), tBoat_('Double', '2x', 2, 70, '')]
           );
           check_(a.crews.length === 1 && a.crews[0].boat.name === 'Double', 'an eight is skipped when only 3 rowers turned up');
@@ -297,22 +297,24 @@
           var unclassed = tBoat_('Unclassed', '2x', 2, 70, '');
 
           check_(classRank_('C') === 1 && classRank_('AA') === 4, "a level's rank matches the boat class it is named after");
-          check_(classRank_(null) === null, 'an ungraded rower has no rank');
-          check_(rowerRank_(tRower_('1', 'Nobody', '')) === 1, 'but counts as C when it comes to boats');
+          check_(classRank_(null) === null, 'a rower with no level has no rank');
+          check_(rowerRank_(tRower_('1', 'Nobody', '')) === 0, 'which counts as 0 - off the scale, not the bottom of it');
 
-          check_(mayRow_(tRower_('1', 'Ungraded', ''), tub), 'an ungraded rower may take a C boat');
-          check_(!mayRow_(tRower_('1', 'Ungraded', ''), shell), 'but not an AA one');
-          check_(mayRow_(tRower_('1', 'Ungraded', ''), unclassed), 'an unclassed hull constrains nobody');
+          check_(!mayRow_(tRower_('1', 'Grupp 0', ''), tub), 'a rower with no level may not take even a C boat');
+          check_(!mayRow_(tRower_('1', 'Grupp 0', ''), unclassed), 'nor an unclassed one, though its own rank is 0 too');
+          check_(mayRow_(tRower_('1', 'Novice', 'C'), tub), 'a C rower may take a C boat');
+          check_(!mayRow_(tRower_('1', 'Novice', 'C'), shell), 'but not an AA one');
+          check_(mayRow_(tRower_('1', 'Novice', 'C'), unclassed), 'an unclassed hull constrains anyone who has a level at all');
           check_(mayRow_(tRower_('1', 'Strong', 'AA'), tub), 'a strong rower may still take an easy boat');
           check_(mayRow_(tRower_('1', 'Exact', 'B'), tBoat_('B boat', '2x', 2, 70, 'B')), 'meeting the class exactly is enough');
         })();
 
         (function () {
-          var a = assign_({ accepted: tRowers_(4, '') }, [
+          var a = assign_({ accepted: tRowers_(4, 'C') }, [
             tBoat_('Racer', '4x/4-', 4, 75, 'A'),
             tBoat_('Tub', '4x/4-', 4, 75, 'C'),
           ]);
-          check_(a.crews.length === 1 && a.crews[0].boat.name === 'Tub', 'four ungraded rowers get the C four, not the A one');
+          check_(a.crews.length === 1 && a.crews[0].boat.name === 'Tub', 'four C rowers get the C four, not the A one');
           check_(a.unassigned.length === 0, 'and all four of them are in it');
           check_(underClassed_(a.crews[0]) === 0, 'the solver never produces an under-classed crew');
         })();
@@ -337,12 +339,12 @@
         })();
 
         (function () {
-          var a = assign_({ accepted: tRowers_(13, '') }, [
+          var a = assign_({ accepted: tRowers_(13, 'C') }, [
             tBoat_('Four', '4x/4-', 4, 75, 'C'),
             tBoat_('Eight', '8+', 8, 85, 'C'),
             tBoat_('Double', '2x', 2, 70, 'C'),
           ]);
-          check_(a.crews.length === 2 && a.crews[0].boat.name === 'Eight', '13 ungraded rowers fill the C eight and four as before');
+          check_(a.crews.length === 2 && a.crews[0].boat.name === 'Eight', '13 C rowers fill the C eight and four as before');
           check_(a.crews[0].seats[0].id === '0' && a.crews[0].seats[7].id === '7', 'in the order they arrived, since nothing sorts equal levels');
           check_(a.unassigned.length === 1 && a.unassigned[0].id === '12', 'and the same rower is left over');
         })();

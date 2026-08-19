@@ -18,6 +18,30 @@ var CONFIG = {
   // Run `listGroups` if you are not sure of the spelling.
   groupName: 'Hammarby Rodd',
 
+  // Which boats each of the club's groups may take. A rower's level is the
+  // BEST class among the groups they are in - see Levels.gs, which is where
+  // the rule and its edge cases are written out.
+  //
+  // Grupp 0 is listed with null on purpose: no water experience, no boat, not
+  // even an unclassed one. Null is off the scale, not the bottom of it.
+  //
+  // Magelungen and Hammarby Herråtta are missing on purpose too. They say
+  // where somebody rows, not how well, so they must not put anyone in a boat.
+  // A group not listed here contributes nothing, and a rower in no listed
+  // group at all counts as C.
+  //
+  // Spelling is matched ignoring case and extra spaces. If a group is renamed
+  // in Spond - "Hammarby Herråtta 2027" - rename it here too; run pullGroups
+  // to see the names exactly as Spond has them.
+  groupLevels: {
+    'Grupp 0': null,
+    'Grupp 1': 'C',
+    'Grupp 1a': 'C',
+    'Grupp 2': 'B',
+    'Grupp 3': 'A',
+    'Grupp 4': 'AA',
+  },
+
   // An event matches if ANY of these appears in its title, case-insensitively
   // and ignoring extra whitespace. An explicit list, not a loose "rowing"
   // match, for the reasons config.toml gives. Add a line when a new open
@@ -35,9 +59,12 @@ var CONFIG = {
   // available, notes. Created with example rows if it does not exist.
   boatsWorksheetName: 'Boats',
 
-  // The tab holding the rower roster: name, level. This is the club's own
-  // small database - Spond has no field for a rower's level, so it lives here.
-  rowersWorksheetName: 'Rowers',
+  // The tab listing each Spond subgroup with its members underneath. Unlike
+  // Boats this one is an output: pullGroups rebuilds it from Spond wholesale,
+  // so nothing typed into it survives. It is also the roster now that the
+  // Rowers tab is gone - every member of the club appears in it exactly once
+  // per group they are in.
+  groupsWorksheetName: 'Groups',
 
   // Everything downstream is read by humans in Stockholm, so the dates and
   // times written to the sheet are local ones. Said out loud here rather than

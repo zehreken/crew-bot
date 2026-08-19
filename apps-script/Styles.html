@@ -137,60 +137,6 @@
     min-width: 0;
   }
 
-  #roster {
-    max-height: 60vh;
-    overflow-y: auto;
-  }
-
-  .roster-item {
-    display: flex;
-    align-items: baseline;
-    gap: 8px;
-    width: 100%;
-    text-align: left;
-    border: 1px solid transparent;
-    border-radius: 5px;
-    padding: 5px 8px;
-    background: none;
-  }
-
-  .roster-item:hover {
-    background: var(--accent-soft);
-  }
-
-  .roster-item.selected {
-    background: var(--accent-soft);
-    border-color: var(--accent);
-  }
-
-  .roster-item.edited {
-    font-weight: 600;
-  }
-
-  .detail-name {
-    font-size: 15px;
-    font-weight: 600;
-    margin-bottom: 2px;
-  }
-
-  .detail-id {
-    font-family: ui-monospace, Menlo, Consolas, monospace;
-    font-size: 11px;
-    color: var(--muted);
-    word-break: break-all;
-    margin-bottom: 10px;
-  }
-
-  .detail-row {
-    margin-top: 10px;
-  }
-
-  .detail-label {
-    font-size: 12px;
-    color: var(--muted);
-    margin-bottom: 3px;
-  }
-
   .panel {
     background: var(--panel);
     border: 1px solid var(--line);
@@ -207,11 +153,38 @@
     margin: 0 0 10px;
   }
 
-  .crew {
+  .panel-note {
+    margin: -4px 0 10px;
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .crew,
+  .group {
     border: 1px solid var(--line);
     border-radius: 8px;
     padding: 10px;
     margin-bottom: 10px;
+  }
+
+  /* Same shape as .crew-head, but nothing in it is a control: a group is read
+     from Spond, so the header is a label and a count and no buttons. */
+  .group-head {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    margin-bottom: 6px;
+    padding: 0 8px;
+    font-weight: 600;
+  }
+
+  /* No hover and no cursor: a member row is read-only, and it should not
+     invite a click that does nothing. */
+  .group-item {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 5px 8px;
   }
 
   .crew-head {
@@ -294,6 +267,44 @@
 
   #pool {
     min-height: 120px;
+  }
+
+  #message-panel {
+    margin-top: 16px;
+  }
+
+  /* body sets user-select:none so a drag does not smear text across the page.
+     This box is the one thing here that exists to be selected, so it says so
+     for itself. */
+  #message {
+    display: block;
+    width: 100%;
+    resize: vertical;
+    font: inherit;
+    color: var(--ink);
+    background: var(--bg);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  #message-panel .bar {
+    margin: 10px 0 0;
+  }
+
+  /* The Groups panel is full width rather than one of a pair, and eight groups
+     stacked would be a long scroll for a list nobody edits. Columns where
+     there is room, one where there is not. */
+  #groups {
+    columns: 260px 3;
+    column-gap: 12px;
+  }
+
+  #groups .group {
+    break-inside: avoid;
+    -webkit-column-break-inside: avoid;
   }
 
   .pool-item + .pool-item {
