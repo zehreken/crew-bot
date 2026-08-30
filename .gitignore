@@ -1,21 +1,16 @@
-# Secrets - never commit these
+# Secrets - never commit these.
+# The web app keeps its own in Script Properties, not in a file; these are
+# what is left of the laptop version that used to live here.
 .env
 secrets/
 
-# Python
+# Leftovers of that same laptop version - a virtualenv for a package that is
+# no longer in the tree, and the JSON it used to hand to the C++ crew app.
+# Nothing reads either any more; they are ignored rather than deleted so that
+# removing them stays a decision somebody makes on purpose.
 .venv/
-__pycache__/
-*.py[cod]
-*.egg-info/
-
-# Generated data - re-created by `crew_bot export` and the crew app
 data/
-
-# C++ build output and vendored dependencies.
-# vendor/imgui is a git clone with its own .git; build.bat tells you how to
-# fetch both if they are missing.
-crew-assign/build/
-crew-assign/vendor/
+__pycache__/
 
 # Editors
 .vscode/
