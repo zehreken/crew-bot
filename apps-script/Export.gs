@@ -1,23 +1,22 @@
 /**
- * The payload the crew assigner reads - a port of src/crew_bot/export.py.
+ * The payload the crew assigner reads.
  *
- * On the Python side this is written to data/attendance.json and handed to a
- * separate C++ program. Here it stays an object: the assigner will be JS in
- * the same project, so the file that used to be the seam between the two
- * halves becomes a return value.
+ * This used to be a file. The Python wrote data/attendance.json and handed it
+ * to a separate C++ program; here the assigner is JS in the same project, so
+ * the seam between the two halves is just a return value.
  *
- * The key names are kept in snake_case (weight_kg, class_rank) exactly as
- * export.py writes them. Not because anything here needs them that way, but so
- * this can be diffed against a real data/attendance.json while both
- * implementations exist. Once the Python side is retired, this is the moment
- * to rename them.
+ * The key names are still snake_case (weight_kg, class_rank), which is not a
+ * JavaScript convention and is not here for one: they matched the JSON the
+ * Python wrote so the two could be diffed during the port. That is over.
+ * Renaming them is free whenever it is convenient - the page is the only
+ * reader, and CrewsJs.html is the only place that would have to follow.
  */
 
 /**
- * A Date as export.py writes it: local time, ISO-8601, explicit offset.
+ * A Date as local time, ISO-8601, with an explicit offset.
  *
  * Local because everything downstream is read by humans in Stockholm. The
- * Python calls .astimezone() with no argument, which means the machine's zone;
+ * Python called .astimezone() with no argument, which means the machine's zone;
  * here it is CONFIG.timeZone, which is the same thing said out loud.
  */
 function localIso_(date) {
@@ -87,8 +86,8 @@ function buildPayload_(snapshot, boats) {
     // ever displays a level, there is nothing to keep a second copy in step
     // with.
     //
-    // Not in the Python's export.py, which has no page to feed. It is the one
-    // field of this payload with no counterpart in data/attendance.json.
+    // Added for the page, which the Python's export had no equivalent of -
+    // this is the one field that was never in the JSON the C++ app read.
     groups: (snapshot.groups ? snapshot.groups.blocks : []).map(function (block) {
       return { name: block.name, members: block.members };
     }),
@@ -154,10 +153,10 @@ function buildFullPayload_() {
 /**
  * Entry point: log the payload as JSON.
  *
- * The check for this step. Run it, copy the JSON out of the execution log, and
- * diff it against a data/attendance.json produced by `crew_bot export` - the
- * key names, the ordering and the timestamp format were all kept identical so
- * that comes out clean.
+ * The whole data layer in one call - Spond, the Boats tab, the group levels -
+ * without a deployment to look at it through. Run it and read the execution
+ * log when the page shows something wrong and you need to know which side of
+ * google.script.run it went wrong on.
  */
 function logPayload() {
   var payload = buildFullPayload_();

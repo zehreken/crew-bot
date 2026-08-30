@@ -56,12 +56,14 @@ function classRank_(boatClass) {
 }
 
 /**
- * Compare two names the way Python's sorted() does - by code point.
+ * Compare two names by code point.
  *
- * Deliberately NOT localeCompare. Python sorts "Åsa" after "Zetterberg";
- * localeCompare may not, and while both orders are defensible, only one of
- * them lets the sheet this produces be diffed against the sheet the Python
- * produces. Parity is worth more than collation while both exist.
+ * Deliberately NOT localeCompare, which for Swedish would sort "Åsa" before
+ * "Zetterberg" rather than after. Both orders are defensible and this one was
+ * inherited from the Python's sorted(); what matters now is only that it does
+ * not change by accident. Switching to localeCompare would silently reorder
+ * every tab in the sheet and fail nothing, so it is worth knowing that the
+ * order here is a choice and not an oversight.
  */
 function compareNames_(a, b) {
   var left = String(a || '');

@@ -1,10 +1,9 @@
 /**
  * Settings and secrets, the Apps Script side.
  *
- * The settings below are the same ones config.toml holds for the Python half.
- * They are duplicated rather than shared because Apps Script cannot read the
- * repo - there is no TOML parser and no filesystem. Keep the two in step by
- * hand until one side or the other stops being used.
+ * Every setting there is. They live in a .gs file rather than a config file
+ * because Apps Script has no filesystem to read one from - there is nowhere
+ * else to put them.
  *
  * Secrets are NOT here and must never be. They live in Script Properties
  * (Project Settings -> Script Properties), which are part of the deployment
@@ -43,17 +42,37 @@ var CONFIG = {
   },
 
   // An event matches if ANY of these appears in its title, case-insensitively
-  // and ignoring extra whitespace. An explicit list, not a loose "rowing"
-  // match, for the reasons config.toml gives. Add a line when a new open
-  // session starts running.
+  // and ignoring extra whitespace. Deliberately an explicit list rather than a
+  // loose "rowing" match, which would also pull in anything else with the word
+  // in its title - regattas, ergo sessions, the club dinner. Add a line when a
+  // new open session starts running.
   eventTitleMatches: ['monday rowing', 'thursday rowing', 'saturday rowing'],
 
   // How many days ahead to look, and a safety cap on one request.
   lookaheadDays: 14,
   maxEvents: 100,
 
-  // The tab to write attendance into. Created if it does not exist.
-  worksheetName: 'Attendance',
+  // How far BACK the Attendance tab counts, and how wide each request into
+  // that window is. See spondEventsBetween_ in Spond.gs for why the window is
+  // walked in chunks rather than asked for in one go; the short version is
+  // that `sponds/` has a `max` and no paging, so one request for a whole year
+  // would return a truncated answer and no error.
+  //
+  // A rolling year rather than a season with a start date: nobody has to
+  // remember to edit it each spring, and a year always contains a whole
+  // season. The cost is that the window slides, so a rower's count drifts
+  // down as old sessions fall off the back of it.
+  historyDays: 365,
+  historyChunkDays: 30,
+
+  // The tab counting how many sessions each rower has signed up for, written
+  // next to Groups. Created if it does not exist.
+  attendanceWorksheetName: 'Attendance',
+
+  // The line the Attendance tab draws itself at. Rowers with MORE than this
+  // many sessions are listed above it - that is the cleaning-crew rule, "more
+  // than ten", so ten itself falls below.
+  attendanceThreshold: 10,
 
   // The tab holding the boat inventory: type, weight, name, producer, class,
   // available, notes. Created with example rows if it does not exist.

@@ -16,6 +16,13 @@ var APP = {
 
   tab: 'assignment',
   groupFilter: '',
+
+  // The Attendance pane loads separately - see loadAttendance. Null means it
+  // has not been asked for yet, which is not the same as it having come back
+  // empty, and the pane says something different for each.
+  attendance: null,
+  attendanceFilter: '',
+  attendanceLoading: false,
 };
 
 // The drag in progress, or null. `moved` guards against a click being read as
@@ -335,13 +342,17 @@ function render() {
   renderCrews();
   renderPool();
   renderGroups();
+  renderAttendance();
   renderMessage();
   el('assign').disabled = !session_();
   el('save').disabled = !session_() || APP.saving;
   el('save-groups').disabled = !groups_().length || APP.saving;
+  el('load-attendance').disabled = APP.attendanceLoading;
+  el('save-attendance').disabled =
+    !APP.attendance || !APP.attendance.entries.length || APP.saving;
 }
 
-var PANES = ['assignment', 'groups'];
+var PANES = ['assignment', 'groups', 'attendance'];
 
 function showTab(name) {
   APP.tab = name;
@@ -639,6 +650,177 @@ function doSaveGroups() {
     .uiSaveGroups(groups_(), ungrouped_());
 }
 
+// -------------------------------------------------------------- attendance --
+
+/**
+ * Fetch the year. Separate from load(), and slow on purpose.
+ *
+ * uiLoadAttendance is a login, the year in chunks, and a profile lookup for
+ * everyone who rowed and has since left - tens of seconds, where the ordinary
+ * page load is one request. It is not folded into load() because a coach
+ * opening this at the boathouse is there to put people in boats, and would be
+ * paying that wait on every visit for a number they ask for a few times a
+ * season. The button says so, and the pane says so while it waits: an Apps
+ * Script call reports no progress, and half a minute of silence reads as a
+ * hang rather than as work.
+ */
+function loadAttendance() {
+  if (APP.attendanceLoading) {
+    return;
+  }
+
+  APP.attendanceLoading = true;
+  setStatus('Reading a year of sessions out of Spond. This takes a while...');
+  render();
+
+  google.script.run
+    .withSuccessHandler(function (report) {
+      APP.attendanceLoading = false;
+      APP.attendance = report;
+      setStatus(
+        report.entries.length + ' rowers over ' + report.sessionCount +
+        (report.sessionCount === 1 ? ' session.' : ' sessions.')
+      );
+      render();
+    })
+    .withFailureHandler(function (err) {
+      APP.attendanceLoading = false;
+      setStatus(err.message || String(err), true);
+      render();
+    })
+    .uiLoadAttendance();
+}
+
+/**
+ * Draw the counts as two blocks: above the line and below it.
+ *
+ * Two blocks rather than one list with a divider row. The sheet draws a
+ * divider because a sheet is a grid and that is all it can do; the pane
+ * already has a vocabulary for "a heading with people under it" from the
+ * Groups pane, and the split IS the question - the cleaning crews come out of
+ * the first block. An empty block is kept for the same reason an empty group
+ * is: "nobody is over the line" is an answer, and a missing heading is not.
+ */
+function renderAttendance() {
+  var host = el('attendance');
+  host.innerHTML = '';
+
+  var report = APP.attendance;
+  if (!report) {
+    var waiting = document.createElement('div');
+    waiting.className = 'empty-note';
+    // Null means not asked for yet; loading means asked for and still going.
+    // Saying the same thing for both would look like the button did nothing.
+    waiting.textContent = APP.attendanceLoading
+      ? 'Reading a year out of Spond. This takes a while.'
+      : 'Press "Load from Spond". It reads the last twelve months, so it ' +
+        'takes longer than the rest of the page.';
+    host.appendChild(waiting);
+    return;
+  }
+
+  var summary = document.createElement('div');
+  summary.className = 'empty-note';
+  summary.textContent =
+    report.window + ': ' + report.sessionCount +
+    (report.sessionCount === 1 ? ' session.' : ' sessions.');
+  host.appendChild(summary);
+
+  var needle = APP.attendanceFilter.trim().toLowerCase();
+  var over = [];
+  var under = [];
+  report.entries.forEach(function (entry) {
+    if (needle && entry.name.toLowerCase().indexOf(needle) === -1) {
+      return;
+    }
+    (entry.attended > report.threshold ? over : under).push(entry);
+  });
+
+  if (!over.length && !under.length) {
+    var empty = document.createElement('div');
+    empty.className = 'empty-note';
+    empty.textContent = needle
+      ? 'Nobody matches "' + APP.attendanceFilter + '".'
+      : 'No sessions matched. Check eventTitleMatches in Config.gs.';
+    host.appendChild(empty);
+    return;
+  }
+
+  [
+    { name: 'More than ' + report.threshold + ' sessions', rows: over },
+    { name: report.threshold + ' sessions or fewer', rows: under },
+  ].forEach(function (block) {
+    var wrap = document.createElement('div');
+    wrap.className = 'group';
+
+    var head = document.createElement('div');
+    head.className = 'group-head';
+    var title = document.createElement('span');
+    title.textContent = block.name;
+    head.appendChild(title);
+    var count = document.createElement('span');
+    count.className = 'level';
+    count.textContent =
+      block.rows.length + (block.rows.length === 1 ? ' rower' : ' rowers');
+    head.appendChild(count);
+    wrap.appendChild(head);
+
+    block.rows.forEach(function (entry) {
+      var item = document.createElement('div');
+      item.className = 'group-item';
+
+      var name = document.createElement('span');
+      // Marked in the name because the row has two columns and the count owns
+      // the other. Somebody who has left the club should not end up on a
+      // cleaning crew however many sessions they rowed before going.
+      name.textContent = entry.former
+        ? entry.name + ' - left the club'
+        : entry.name;
+      item.appendChild(name);
+
+      var tally = document.createElement('span');
+      tally.className = 'level';
+      // Attended of invited, so a low count that is really a late arrival
+      // reads as one. The sheet has a column for it; here it is one cell.
+      tally.textContent = entry.attended + ' of ' + entry.invited;
+      item.appendChild(tally);
+
+      wrap.appendChild(item);
+    });
+
+    host.appendChild(wrap);
+  });
+}
+
+/**
+ * Write the Attendance tab from what the pane is showing.
+ *
+ * The report the page is holding goes straight back, unchanged - so the sheet
+ * says what the coach was looking at, and nobody waits through a second
+ * year-long fetch to write it down. Same rule as the crews and groups saves.
+ */
+function doSaveAttendance() {
+  if (APP.saving || !APP.attendance || !APP.attendance.entries.length) {
+    return;
+  }
+
+  APP.saving = true;
+  el('save-attendance').disabled = true;
+  setStatus('Writing the Attendance tab...');
+  google.script.run
+    .withSuccessHandler(function (message) {
+      APP.saving = false;
+      setStatus(message);
+      render();
+    })
+    .withFailureHandler(function (err) {
+      APP.saving = false;
+      setStatus(err.message || String(err), true);
+      render();
+    })
+    .uiSaveAttendance(APP.attendance);
+}
+
 // ---------------------------------------------------------------- dragging --
 
 function onPointerDown(event) {
@@ -819,7 +1001,16 @@ window.addEventListener('DOMContentLoaded', function () {
   el('tab-groups').onclick = function () {
     showTab('groups');
   };
+  el('tab-attendance').onclick = function () {
+    showTab('attendance');
+  };
   el('save-groups').onclick = doSaveGroups;
+  el('load-attendance').onclick = loadAttendance;
+  el('save-attendance').onclick = doSaveAttendance;
+  el('attendance-filter').oninput = function () {
+    APP.attendanceFilter = el('attendance-filter').value;
+    renderAttendance();
+  };
   el('copy-message').onclick = doCopyMessage;
   el('group-filter').oninput = function () {
     APP.groupFilter = el('group-filter').value;

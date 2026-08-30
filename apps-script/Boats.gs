@@ -183,7 +183,7 @@ function loadBoats_(spreadsheet) {
 }
 
 /**
- * Entry point: list the boat inventory, the equivalent of `crew_bot boats`.
+ * Entry point: list the boat inventory.
  *
  * Prints unclassed boats as "-" and counts them, so it is easy to see what is
  * still left to fill in.

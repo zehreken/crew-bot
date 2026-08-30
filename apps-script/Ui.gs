@@ -10,9 +10,82 @@
  * edits have to run where the pointer is.
  */
 
-/** Pull an HTML partial into a template. Used for the CSS and the JS files. */
+/**
+ * Pull an HTML partial into a template. Used for the CSS and the JS files.
+ *
+ * **Do not run this from the editor.** It is called only from the page, as
+ * `<?!= include('Styles') ?>`, and it is the first function in this file -
+ * which is the one the Run dropdown selects when Ui.gs is the open file. Run
+ * it with no argument and createHtmlOutputFromFile throws `Bad value`, the
+ * same message it throws for a file that is genuinely missing, from a stack
+ * one frame deep. It reads exactly like the page being broken and it is not.
+ *
+ * It has no trailing underscore because the convention here marks the entry
+ * points, and this is one - just not one for a person to press.
+ */
 function include(filename) {
   return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+/** The partials Index.html and SelfTest.html pull in, by the names they use. */
+var INCLUDED_FILES = ['Styles', 'CrewsJs', 'AppJs'];
+
+/**
+ * Roughly how long each partial is in the repo, for spotting a truncated one.
+ *
+ * Approximate on purpose - these drift every time the CSS or the page changes,
+ * and a stale number here is harmless. It is only ever compared by eye, and
+ * the thing it is looking for is a file that arrived half its size.
+ */
+var INCLUDED_SIZES = { Styles: 6166, CrewsJs: 14543, AppJs: 24912 };
+
+/**
+ * Diagnostic: check that every included partial loads.
+ *
+ * `include` fails as `Exception: Bad value`, which names neither the file nor
+ * the reason, and there are two reasons. **The file is not there under that
+ * name** - `+ New file -> Script` makes a .gs that include() cannot see, and
+ * typing "Styles.html" into the name box makes a file called
+ * "Styles.html.html". Or **the file is there and its content will not parse**,
+ * which for a file pasted by hand almost always means the paste was cut short
+ * and left the `<style>` or `<script>` tag unclosed.
+ *
+ * So this reports the length as well as the failure. A partial that loads but
+ * comes back well under its size in INCLUDED_SIZES is the one to paste again,
+ * even though it did not throw - a truncated file that happens to still parse
+ * is worse than one that does not, because the page half works.
+ */
+function checkIncludes() {
+  var failed = [];
+
+  INCLUDED_FILES.forEach(function (name) {
+    var expected = INCLUDED_SIZES[name] || 0;
+    try {
+      var length = HtmlService.createHtmlOutputFromFile(name).getContent().length;
+      var short = expected && length < expected * 0.9;
+      console.log(
+        '%s  %-8s %s characters, expected about %s',
+        short ? 'SHORT ' : 'ok    ',
+        name,
+        length,
+        expected
+      );
+    } catch (err) {
+      failed.push(name);
+      console.log('FAILED  %-8s %s', name, err.message);
+    }
+  });
+
+  if (!failed.length) {
+    console.log('All %s partials load.', INCLUDED_FILES.length);
+    return;
+  }
+  console.log(
+    'Check %s in the editor: that it is an HTML file rather than a script, ' +
+    'that its name has no ".html" typed on the end, and that its last line ' +
+    'closes the tag its first line opens.',
+    failed.join(' and ')
+  );
 }
 
 /**
@@ -40,8 +113,43 @@ function uiLoadPayload() {
 }
 
 /**
- * Lay the crews out for humans to read on the day - a port of crews_to_rows
- * in sheets.py.
+ * Everything the Attendance pane shows, fetched on demand.
+ *
+ * Deliberately NOT part of uiLoadPayload. That one runs on every page load and
+ * has to be quick, because a coach opening the page at the boathouse is there
+ * to put people in boats. This is a login, a dozen chunked event requests and
+ * a profile lookup for everyone who rowed and has since left - tens of seconds
+ * on a phone at the water's edge. Nobody should pay that for statistics they
+ * did not ask for, so the pane has its own button and this has its own trip.
+ */
+function uiLoadAttendance() {
+  return buildAttendanceReport_();
+}
+
+/**
+ * Write the Attendance tab from what the pane is showing.
+ *
+ * The report goes out to the page and comes straight back, which is the point:
+ * the sheet gets exactly what the coach was looking at when they pressed the
+ * button, and nobody waits through a second year-long fetch to get it. Same
+ * rule uiSaveCrews and uiSaveGroups follow.
+ */
+function uiSaveAttendance(report) {
+  if (!report || !(report.entries || []).length) {
+    throw new Error(
+      'Nothing to write. Press "Load from Spond" on the Attendance tab first.'
+    );
+  }
+
+  var written = writeAttendanceTab_(report);
+  return (
+    'Wrote ' + written + ' rowers to the "' +
+    CONFIG.attendanceWorksheetName + '" tab.'
+  );
+}
+
+/**
+ * Lay the crews out for humans to read on the day.
  *
  * One block per boat, then anyone left over. Read by a coach at the boathouse,
  * so it favours short lines over a wide table.

@@ -22,10 +22,11 @@
 /**
  * Compare names ignoring case, then by code point.
  *
- * The Python sorts these lists with key=str.lower, so matching it is what lets
- * the two tabs be diffed while both implementations exist - the same reason
- * compareNames_ exists at all. (toLowerCase and Python's .lower() can disagree
- * on exotic scripts; for Swedish names they do not.)
+ * Case folded first because these are lists a coach scans for a name, and
+ * putting every lower-case surname after every upper-case one makes that
+ * harder for no reason. compareNames_ still breaks the tie, so the same
+ * warning applies: this is a choice, and localeCompare would quietly reorder
+ * the tab without failing anything.
  */
 function compareNamesIgnoringCase_(a, b) {
   return compareNames_(
@@ -121,8 +122,8 @@ function memberCount_(count) {
  * Same shape as crewsToRows_, and for the same reason: this is read down a
  * phone screen, so it is a list with headings rather than a wide table.
  *
- * The banner says out loud that the tab is rebuilt from Spond. Boats and
- * Rowers sit next to it and are the opposite, and without the line there is
+ * The banner says out loud that the tab is rebuilt from Spond. Boats sits next
+ * to it and is the opposite - typed in by hand - and without the line there is
  * nothing to tell them apart on screen.
  *
  * Names repeat: Spond lets a rower sit in several subgroups at once and the
@@ -226,9 +227,9 @@ function placedCount_(blocks) {
 /**
  * Entry point: pull the club's subgroups from Spond and write the Groups tab.
  *
- * The equivalent of `crew_bot groups-tab`. Cheaper than pullAttendance: the
- * subgroups arrive inside the group payload, so this is one login and one GET,
- * with no event fetch and no profile lookups.
+ * Much cheaper than pullAttendance: the subgroups arrive inside the group
+ * payload, so this is one login and one GET, with no event fetch and no
+ * profile lookups.
  *
  * The page has its own route to the same tab - the Groups pane's "Write to
  * sheet" button, via uiSaveGroups - so this is the developer's copy, for

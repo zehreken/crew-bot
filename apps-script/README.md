@@ -5,9 +5,11 @@ assigns crews in a web page, and the result goes back to the sheet. No computer
 of ours involved and no database — the sheet stays the database, as it always
 was.
 
-This is the version in use. The Python CLI and the C++ crew app in the rest of
-the repo are what it was ported from — superseded now, still runnable, and
-still the clearest statement of the rules when something here is unclear.
+This is the whole thing. It was ported from a Python CLI and a C++/ImGui
+desktop app, which are gone from the working tree — once this was deployed they
+did nothing but drift out of step with it. They are still in the history up to
+`3c6cb75`, and a few notes below point at them, because the Python said some of
+these rules in fewer lines than the Apps Script does.
 
 ## Why it is built this way
 
@@ -34,13 +36,13 @@ Server side (`.gs`) — runs on Google's servers:
 
 | file | what it is |
 |---|---|
-| `Config.gs` | the `config.toml` values, and Script Property access |
+| `Config.gs` | every setting there is, and Script Property access |
 | `Models.gs` | the C/B/A/AA scale and the small shared helpers |
-| `Spond.gs` | login, group lookup, event fetch, title filter |
+| `Spond.gs` | login, group lookup, event fetch (both directions), title filter |
 | `Boats.gs` | reads the Boats tab |
 | `Levels.gs` | works out each rower's level from the groups they are in |
 | `Groups.gs` | writes the Groups tab: each Spond subgroup and its members |
-| `Attendance.gs` | writes the Attendance tab |
+| `Attendance.gs` | counts a year of sign-ups into the Attendance tab |
 | `Export.gs` | assembles the payload the page reads |
 | `Ui.gs` | serves the page; loads the payload, saves crews and groups |
 
@@ -64,8 +66,9 @@ the server is only called on load and on save.
 
 The cost is that the C/B/A/AA vocabulary now exists twice — `Models.gs` for the
 sheet readers, `CrewsJs.html` for the page — and the two must be kept in step.
-That is the same arrangement `crews.h` had with its `kLevels` mirroring
-`LEVELS` in `models.py`.
+That is the same arrangement the C++ had, where `crews.h` carried a `kLevels`
+array mirroring the Python's — the duplication came with the shape of the
+problem, not with the port.
 
 ## Setup
 
@@ -103,6 +106,12 @@ boat it can never be put in one.
 
 ### 3. Check it from the editor
 
+**Choose the function in the dropdown before pressing Run.** It defaults to
+the first function in whichever file is open, which for `Ui.gs` is `include` —
+a helper the page calls with a filename. Run on its own it gets no argument and
+fails as `Exception: Bad value`, a one-frame stack that looks exactly like a
+missing HTML partial and is not one.
+
 In the function dropdown, in order:
 
 1. **`listGroups`** — proves the login works and Google can reach Spond,
@@ -114,11 +123,21 @@ In the function dropdown, in order:
    `eventTitleMatches`. A filter matching nothing produces an empty tab rather
    than an error, so this is how you see what the events are called.
 3. **`listBoats`** — the inventory. Unclassed hulls print as `-`.
-4. **`selfTestLevels`** — checks the group-to-class rule against the cases
-   that decided its shape, including the leaders who are in every group. Needs
-   no login and touches nothing; it is here because the rule lives server-side
-   where `?page=selftest` cannot reach it.
-5. **`pullGroups`** — writes the Groups tab: each of the club's groups
+4. **`checkIncludes`** — that `Styles`, `CrewsJs` and `AppJs` all load, and
+   how long each came back. Worth running whenever the project is filled in by
+   hand rather than pushed with clasp, because `include` fails as
+   `Exception: Bad value` for two different reasons and names neither: the file
+   is not there under that name (created as a Script instead of HTML, or named
+   `Styles.html` so the editor made it `Styles.html.html`), or it is there and
+   will not parse, which for a pasted file means the paste was cut short and
+   left a tag unclosed. The lengths catch the third case, where a truncated
+   paste still parses and the page only half works.
+5. **`selfTestLevels`** and **`selfTestAttendance`** — the two server-side
+   rules that `?page=selftest` cannot reach, checked against made-up data.
+   `selfTestLevels` covers the group-to-class rule, including the leaders who
+   are in every group; `selfTestAttendance` covers who lands on the Attendance
+   tab and in what order. Neither needs a login and neither touches the sheet.
+6. **`pullGroups`** — writes the Groups tab: each of the club's groups
    (Grupp 0 to Grupp 4, Magelungen, Hammarby Herråtta) with its members under
    it. Named `pullGroups` and not `listGroups` because that one is taken by
    step 1 — Spond's *group* is the club itself, and what a coach calls a group
@@ -126,8 +145,14 @@ In the function dropdown, in order:
    inside the group payload, so it is one login and one GET. The deployed page
    writes the same tab from its Groups pane, so this one is really for
    checking the setup before there is a deployment to check it from.
-6. **`pullAttendance`** — writes the Attendance tab.
-7. **`logPayload`** — the whole data layer in one call, as JSON.
+7. **`pullAttendance`** — writes the Attendance tab: one row per rower, how
+   many of the past year's sessions they signed up for. The expensive one. It
+   walks the year a month at a time (`sponds/` has a `max` and no paging, so
+   one request for a year would come back truncated with a 200) and then looks
+   up anyone who rowed but has since left the group, which is a dozen or more
+   requests where `pullGroups` is two. Run it when you want the numbers, not
+   on a trigger.
+8. **`logPayload`** — the whole data layer in one call, as JSON.
 
 ### 4. Deploy the web app
 
@@ -153,25 +178,62 @@ sequence of drags, each rower who accepted is in exactly one seat or in the
 pool — never lost, never duplicated. It is re-checked after each kind of edit,
 along with every stray-drop case.
 
-## Checking against the Python
+Two more suites live server-side, where that page cannot reach them, and are
+run from the editor's function dropdown: **`selfTestLevels`** for the
+group-to-class rule and **`selfTestAttendance`** for the Attendance tab's
+counting and layout. Both are pure — made-up data, no login, no sheet — so
+they are safe to run at any time and fail loudly with a count in the log.
 
-`isoUtc_` formats timestamps the way `datetime.isoformat` does (`+00:00`, not
-`Z`), the columns match `HEADER` in `sheets.py`, and `compareNames_` sorts by
-code point the way Python's `sorted()` does rather than by locale. So point
-`SPREADSHEET_ID` at a copy of the sheet, run `pullAttendance` and `crew_bot
-fetch`, and diff the tabs.
+## The Attendance tab, and its pane
 
-`pullGroups` and `crew_bot groups-tab` write the same tab from the same data,
-down to the sort: both order groups and members by lower-cased name, which is
-why `compareNamesIgnoringCase_` exists rather than a bare `localeCompare`. The
-tab is an output — replaced wholesale every run — so running either against one
-sheet gives the same result, in either order.
+There are two ways to the same numbers. **`pullAttendance`** in the editor
+fetches and writes the sheet tab. **The Attendance tab in the page** — third
+along, after Groups — fetches and draws them, with a "Write to sheet" button
+that writes the very thing on screen. Both go through `buildAttendanceReport_`,
+so they cannot drift into counting differently.
 
-`logPayload` prints the same JSON `crew_bot export` writes — snake_case keys
-and all, kept that way purely so it can be diffed against a real
-`data/attendance.json` during the port. That was their whole purpose, and with
-the Python superseded there is nothing left to diff against: renaming them to
-camelCase is now free whenever it is convenient.
+The pane has its own **"Load from Spond"** button and is empty until you press
+it. That is deliberate and it is the one design decision here worth defending:
+`uiLoadAttendance` is a login, a dozen chunked event requests, and a profile
+lookup for everyone who rowed and has since left — tens of seconds, where the
+ordinary page load is one request. Folding it into `uiLoadPayload` would make
+every coach opening the page at the boathouse wait through it, on every visit,
+for a number they want a few times a season.
+
+The page draws the split as two blocks rather than the sheet's divider row —
+*More than 10 sessions* and *10 or fewer* — because the pane already has that
+shape from the Groups pane, and the split is the question being asked.
+
+It answers one question — who has been to more than ten sessions — because
+that is how the cleaning crews get picked. Sorted by count with a divider drawn
+where the threshold falls, so the answer is "the rows above the line" rather
+than something to work out cell by cell. `attendanceThreshold` in `Config.gs`
+moves the line.
+
+**It counts sign-ups, not check-ins, and this is not a bug that can be fixed
+here.** Spond's record of an event is what people pressed in the app: accepted,
+declined, no answer. Whether they then turned up is not in the API. So a rower
+who accepts and stays home is counted, and one who rows every week without
+answering is not. The tab says so in its own third line. Adjusting for the
+people you know row anyway is the coach's job.
+
+Three columns exist to make a low count readable rather than damning:
+
+- **Invited** is the denominator. Somebody who joined the club in May has a
+  small count for a reason that is not about them. It is not the sum of the
+  other three — Spond also has *unconfirmed* and *waitinglist*, and both mean
+  the invitation arrived.
+- **Declined** and **No answer** separate "said no" from "never looked".
+
+Who appears: every current member of the group, including anyone sitting on
+nothing but zeroes — that is the finding, not a gap — plus anyone else who
+actually rowed, marked *no longer in the group*. Somebody who was invited a
+year ago, never answered, and has since left is not worth a row and does not
+get one.
+
+The window is a rolling 365 days rather than a season with a start date, so
+there is nothing to remember to edit each spring. The cost is that it slides:
+a rower's count drifts down as old sessions fall off the back of it.
 
 ## The crew logic
 

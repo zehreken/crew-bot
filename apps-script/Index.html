@@ -17,6 +17,7 @@
     <div class="tabs">
       <button id="tab-assignment" class="tab active">Assignment</button>
       <button id="tab-groups" class="tab">Groups</button>
+      <button id="tab-attendance" class="tab">Attendance</button>
     </div>
 
     <div id="pane-assignment">
@@ -76,6 +77,32 @@
           Reload.
         </p>
         <div id="groups"></div>
+      </div>
+    </div>
+
+    <!-- Statistics, not part of getting anyone on the water: who actually
+         turns up, so the cleaning crews can be picked from them. Its own
+         button rather than part of the page load, because it reads a year out
+         of Spond and that takes tens of seconds - nobody standing on the dock
+         assigning a crew should wait for it. -->
+    <div id="pane-attendance" class="hidden">
+      <div class="bar">
+        <button id="load-attendance" class="primary">Load from Spond</button>
+        <input id="attendance-filter" type="search" placeholder="Filter by name" />
+        <button id="save-attendance" disabled>Write to sheet</button>
+      </div>
+
+      <div class="panel">
+        <h2>Attendance</h2>
+        <p class="panel-note">
+          Sign-ups over the last twelve months, not check-ins: somebody who
+          accepts and stays home is counted here, and somebody who rows every
+          week without answering is not. Adjust for the people you know row
+          anyway. "42 of 53" is sessions accepted out of sessions invited to,
+          so somebody who joined in the spring reads low for a reason that is
+          not about them.
+        </p>
+        <div id="attendance"></div>
       </div>
     </div>
 

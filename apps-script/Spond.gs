@@ -200,10 +200,11 @@ function sessionFromEvent_(event) {
 }
 
 /**
- * One login, one pull: the group, its members, and the matching sessions.
+ * One login, one pull: the group, its members, and the sessions still to come.
  *
- * Returns the same shape Snapshot has in models.py, so what this writes to the
- * sheet can be compared row for row with what the Python writes.
+ * What the page runs on. Nothing writes it to a sheet - Export.gs turns it
+ * into the payload and the browser does the rest. See pullHistory_ at the
+ * bottom of this file for the same fetch pointed backwards.
  */
 function pullSnapshot_() {
   var now = new Date();
@@ -279,6 +280,163 @@ function pullSnapshot_() {
     // the caller because the raw subGroups arrays are the one thing this
     // function throws away, and re-fetching the group to get them back would
     // be a second login. See subgroupBlocks_ in Groups.gs.
+    groups: subgroupBlocks_(group),
+  };
+}
+
+/**
+ * Every event Spond has between two dates, fetched a chunk at a time.
+ *
+ * `sponds/` takes a `max` and offers no offset - there is no paging - so a
+ * window holding more events than `max` comes back truncated, silently and
+ * with a 200. Three sessions a week for a year is over 150; CONFIG.maxEvents
+ * is 100. Asking for the year in one request would quietly lose a third of it
+ * and the tab would look fine.
+ *
+ * Walking the window in fixed chunks sidesteps the question rather than
+ * answering it: each request covers a few weeks, far under any plausible cap,
+ * and it does not matter what Spond's real server-side limit turns out to be.
+ * Results are merged by event id because spondDayStamp_ has day resolution and
+ * both bounds are inclusive, so consecutive chunks genuinely do overlap by a
+ * day.
+ *
+ * A chunk that comes back exactly full is the one case this cannot rule out,
+ * so it says so rather than guessing - shrink historyChunkDays if it appears.
+ */
+function spondEventsBetween_(token, groupId, from, to) {
+  var day = 86400000;
+  // Guarded because a zero or negative chunk would never advance the cursor,
+  // and an infinite loop here means a six-minute execution timeout.
+  var chunk = Math.max(1, CONFIG.historyChunkDays) * day;
+
+  var byId = {};
+  var cursor = from.getTime();
+  var end = to.getTime();
+
+  while (cursor < end) {
+    var chunkEnd = Math.min(cursor + chunk, end);
+    var events =
+      spondGet_('sponds/', token, {
+        max: String(CONFIG.maxEvents),
+        scheduled: 'true',
+        groupId: groupId,
+        minStartTimestamp: spondDayStamp_(new Date(cursor)),
+        maxStartTimestamp: spondDayStamp_(new Date(chunkEnd)),
+      }) || [];
+
+    if (events.length >= CONFIG.maxEvents) {
+      console.warn(
+        'A %s-day chunk returned %s events, the requested maximum - it may ' +
+        'have been truncated. Lower historyChunkDays in Config.gs.',
+        CONFIG.historyChunkDays,
+        events.length
+      );
+    }
+
+    events.forEach(function (event) {
+      if (event.id) {
+        byId[event.id] = event;
+      }
+    });
+
+    cursor = chunkEnd;
+  }
+
+  return Object.keys(byId).map(function (id) {
+    return byId[id];
+  });
+}
+
+/**
+ * One login, one pull: the group and every matching session behind us.
+ *
+ * The mirror image of pullSnapshot_, and separate from it on purpose. The two
+ * differ in the one line that matters - that one drops sessions that have
+ * already started, this one keeps only those - and folding them together
+ * behind a flag would put the inverted test somewhere a reader has to hold
+ * both meanings in their head at once.
+ *
+ * The shape it returns is Snapshot plus a `from`/`to`, so everything already
+ * written against a snapshot (subgroupBlocks_, applyGroupLevels_, fullName_)
+ * works on it unchanged.
+ *
+ * What it counts is a Spond RESPONSE, not a check-in. Somebody who accepts and
+ * stays home is counted as having attended, and somebody who turns up without
+ * signing up is not counted at all. The tab says so out loud, because that
+ * gap is the coach's to close by hand and cannot be closed here.
+ */
+function pullHistory_() {
+  var now = new Date();
+  var from = new Date(now.getTime() - CONFIG.historyDays * 86400000);
+
+  var token = spondLogin_();
+
+  var groups = spondGet_('groups/', token) || [];
+  if (!groups.length) {
+    throw new Error('Spond returned no groups for this login.');
+  }
+  var group = findGroup_(groups, CONFIG.groupName);
+  var rowers = rowersFromGroup_(group);
+
+  var events = spondEventsBetween_(token, group.id, from, now);
+
+  var sessions = [];
+  for (var i = 0; i < events.length; i++) {
+    if (!matchesTitle_(events[i].heading, CONFIG.eventTitleMatches)) {
+      continue;
+    }
+    var session = sessionFromEvent_(events[i]);
+    // The last chunk ends today, and Spond's filter is day-resolution, so a
+    // session later this evening arrives with the ones already rowed. Nobody
+    // has attended it yet.
+    if (!session || session.start > now) {
+      continue;
+    }
+    sessions.push(session);
+  }
+  sessions.sort(function (a, b) {
+    return a.start - b.start;
+  });
+
+  // Over a year, the people who responded but are not in the member list now
+  // are mostly former members and guests, and there can be a lot of them -
+  // each one costs a request. Only those who actually turned up are worth a
+  // name: somebody who was invited, never answered, and has since left is a
+  // row of zeroes, and the tab drops them for that reason anyway.
+  var unknown = {};
+  sessions.forEach(function (session) {
+    Object.keys(session.responses).forEach(function (rowerId) {
+      if (!rowers[rowerId] && session.responses[rowerId] === 'accepted') {
+        unknown[rowerId] = true;
+      }
+    });
+  });
+  Object.keys(unknown).forEach(function (rowerId) {
+    var person = {};
+    try {
+      person = spondGet_('profile/' + rowerId, token) || {};
+    } catch (err) {
+      // An unresolvable id still belongs in the count - fullName_ falls back
+      // to showing the id itself.
+      person = {};
+    }
+    rowers[rowerId] = {
+      id: rowerId,
+      firstName: person.firstName || '',
+      lastName: person.lastName || '',
+      // Flagged rather than dropped: they rowed, so their sessions happened,
+      // but they are not on the roster a coach is picking a crew from.
+      formerMember: true,
+    };
+  });
+
+  return {
+    fetchedAt: now,
+    from: from,
+    to: now,
+    groupName: group.name || CONFIG.groupName,
+    rowers: rowers,
+    sessions: sessions,
     groups: subgroupBlocks_(group),
   };
 }
