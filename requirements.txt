@@ -1,4 +1,0 @@
-spond
-gspread
-google-auth
-python-dotenv
