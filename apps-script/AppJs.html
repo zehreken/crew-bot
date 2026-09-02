@@ -30,6 +30,11 @@ var APP = {
 var DRAG = null;
 var DRAG_THRESHOLD = 4;
 
+// The frame loop that scrolls the page while a drag sits against its edge, or
+// null when no drag is running. See startEdgeScroll_.
+var DRAG_SCROLL = null;
+var DRAG_EDGE = 72; // px from the top or bottom of the window that scrolls
+
 function el(id) {
   return document.getElementById(id);
 }
@@ -451,7 +456,10 @@ function seatRow_(crew, crewIndex, rower, seatIndex) {
   row.className = below ? 'seat filled under' : 'seat filled';
   row.dataset.dragKind = 'seat';
 
+  // Classed rather than found by position: the drag reads the label off this
+  // span, and the row has three spans in it that all look alike to a selector.
   var name = document.createElement('span');
+  name.className = 'nm';
   name.textContent = rower.name;
   row.appendChild(name);
 
@@ -462,6 +470,8 @@ function seatRow_(crew, crewIndex, rower, seatIndex) {
   level.textContent =
     levelLabel_(rower.level) + (below && rower.level ? '   below class' : '');
   row.appendChild(level);
+
+  row.appendChild(grip_());
 
   return row;
 }
@@ -488,6 +498,7 @@ function renderPool() {
     row.dataset.pool = String(poolIndex);
 
     var name = document.createElement('span');
+    name.className = 'nm';
     name.textContent = rower.name;
     row.appendChild(name);
 
@@ -496,8 +507,40 @@ function renderPool() {
     level.textContent = levelLabel_(rower.level);
     row.appendChild(level);
 
+    row.appendChild(grip_());
+
     host.appendChild(row);
   });
+}
+
+/**
+ * The handle a finger drags a rower by.
+ *
+ * It exists because of one CSS property. A touch that starts on ordinary
+ * content belongs to the browser, which pans the page with it and sends the
+ * page a pointercancel - so on a phone every drag died a few pixels in.
+ * `touch-action: none` takes the gesture back, but on the whole row it would
+ * take scrolling with it, and the pool on a phone is mostly rows: there would
+ * be nothing left to pull the list up by. So the exemption is this one small
+ * span, and the two gestures stop competing - grip to drag, anywhere else to
+ * scroll.
+ *
+ * A mouse ignores all of this and still drags the whole row; see
+ * onPointerDown. The grip is drawn for both because a control that appears
+ * only on touch is a control nobody discovers.
+ *
+ * aria-hidden because it is a texture, not a word: a screen reader reading
+ * "braille pattern dots" after every name would be worse than silence.
+ */
+function grip_() {
+  var grip = document.createElement('span');
+  grip.className = 'grip';
+  // As an escape, not the character: this file gets pasted into the Apps
+  // Script editor by hand often enough that ASCII source is worth it.
+  grip.textContent = '\u283f';
+  grip.setAttribute('aria-hidden', 'true');
+  grip.title = 'Drag to move';
+  return grip;
 }
 
 function button_(text, title, onClick) {
@@ -832,16 +875,29 @@ function onPointerDown(event) {
     return;
   }
 
+  // A mouse takes hold of the row anywhere on it. A finger or a pen may take
+  // hold only of the grip, because the rest of the row has to stay the thing
+  // that scrolls the list - see grip_ and `touch-action` in Styles.html for
+  // why the two cannot be the same surface.
+  var byTouch = event.pointerType === 'touch' || event.pointerType === 'pen';
+  if (byTouch && !event.target.closest('.grip')) {
+    return;
+  }
+
+  var label = source.querySelector('.nm');
   DRAG = {
     kind: source.dataset.dragKind,
     crew: source.dataset.crew === undefined ? -1 : parseInt(source.dataset.crew, 10),
     seat: source.dataset.seat === undefined ? -1 : parseInt(source.dataset.seat, 10),
     pool: source.dataset.pool === undefined ? -1 : parseInt(source.dataset.pool, 10),
-    label: source.firstChild && source.querySelector('span:not(.num):not(.level)')
-      ? source.querySelector('span:not(.num):not(.level)').textContent
-      : '',
+    label: label ? label.textContent : '',
+    touch: byTouch,
     startX: event.clientX,
     startY: event.clientY,
+    // Kept up to date on every move, because the drop reads them and so does
+    // the scroll loop, which runs on frames rather than on pointer events.
+    x: event.clientX,
+    y: event.clientY,
     moved: false,
   };
   // So the drag survives the pointer leaving the element it started on.
@@ -853,10 +909,13 @@ function onPointerMove(event) {
   if (!DRAG) {
     return;
   }
+  DRAG.x = event.clientX;
+  DRAG.y = event.clientY;
+
   if (!DRAG.moved) {
     var far =
-      Math.abs(event.clientX - DRAG.startX) > DRAG_THRESHOLD ||
-      Math.abs(event.clientY - DRAG.startY) > DRAG_THRESHOLD;
+      Math.abs(DRAG.x - DRAG.startX) > DRAG_THRESHOLD ||
+      Math.abs(DRAG.y - DRAG.startY) > DRAG_THRESHOLD;
     if (!far) {
       return;
     }
@@ -864,13 +923,90 @@ function onPointerMove(event) {
     var ghost = el('ghost');
     ghost.textContent = DRAG.label;
     ghost.classList.remove('hidden');
+    startEdgeScroll_();
   }
 
-  var ghostNode = el('ghost');
-  ghostNode.style.left = event.clientX + 12 + 'px';
-  ghostNode.style.top = event.clientY + 12 + 'px';
+  placeGhost_();
+  highlight_(dropTargetAt_(DRAG.x, DRAG.y));
+}
 
-  highlight_(dropTargetAt_(event.clientX, event.clientY));
+/**
+ * Put the ghost where the coach can actually see it.
+ *
+ * Under a mouse it trails below and right of the cursor, out of the way of
+ * what is being aimed at. Under a finger that same offset puts it under the
+ * hand, so on touch it sits above the touch point and centred on it - the
+ * fingertip is the drop point, and the name has to clear the finger to be
+ * read at all.
+ */
+function placeGhost_() {
+  var ghost = el('ghost');
+  var x = DRAG.touch ? DRAG.x - ghost.offsetWidth / 2 : DRAG.x + 12;
+  var y = DRAG.touch ? DRAG.y - ghost.offsetHeight - 24 : DRAG.y + 12;
+
+  // Held on screen, so a name dragged to the very top or to either edge is
+  // still a readable label rather than half of one.
+  x = Math.max(4, Math.min(x, window.innerWidth - ghost.offsetWidth - 4));
+  y = Math.max(4, y);
+
+  ghost.style.left = Math.round(x) + 'px';
+  ghost.style.top = Math.round(y) + 'px';
+}
+
+/**
+ * Scroll the page while a drag is held against the top or bottom of it.
+ *
+ * On a phone the crews and the pool are stacked rather than side by side, so
+ * the two ends of a drag are routinely not on screen together - and the hand
+ * that would scroll to find the other end is the hand holding the rower. So
+ * the drag scrolls: within DRAG_EDGE of an edge the page moves, faster the
+ * nearer the edge, which also gives a coach a way to slow it down.
+ *
+ * It runs on its own frame loop rather than out of onPointerMove because a
+ * finger parked at the bottom of the screen waiting for the page to come to it
+ * sends no move events at all - it is not moving. The loop re-reads the drop
+ * target each frame for the same reason: the page slid underneath, so what is
+ * under the finger changed without the finger.
+ */
+function startEdgeScroll_() {
+  if (DRAG_SCROLL !== null) {
+    return;
+  }
+
+  var step = function () {
+    if (!DRAG || !DRAG.moved) {
+      DRAG_SCROLL = null;
+      return;
+    }
+    var speed = edgeSpeed_(DRAG.y);
+    if (speed) {
+      window.scrollBy(0, speed);
+      placeGhost_();
+      highlight_(dropTargetAt_(DRAG.x, DRAG.y));
+    }
+    DRAG_SCROLL = window.requestAnimationFrame(step);
+  };
+
+  DRAG_SCROLL = window.requestAnimationFrame(step);
+}
+
+function stopEdgeScroll_() {
+  if (DRAG_SCROLL !== null) {
+    window.cancelAnimationFrame(DRAG_SCROLL);
+    DRAG_SCROLL = null;
+  }
+}
+
+/** Pixels to scroll this frame for a drag at y, negative for up, 0 for none. */
+function edgeSpeed_(y) {
+  if (y < DRAG_EDGE) {
+    return -Math.ceil((DRAG_EDGE - y) / 5);
+  }
+  var bottom = window.innerHeight - DRAG_EDGE;
+  if (y > bottom) {
+    return Math.ceil((y - bottom) / 5);
+  }
+  return 0;
 }
 
 function onPointerUp(event) {
@@ -878,19 +1014,45 @@ function onPointerUp(event) {
     return;
   }
   var drag = DRAG;
-  DRAG = null;
-  el('ghost').classList.add('hidden');
-  highlight_(null);
+  drag.x = event.clientX;
+  drag.y = event.clientY;
+  endDrag_();
 
   if (!drag.moved) {
     return; // a click, not a drag
   }
 
-  var target = dropTargetAt_(event.clientX, event.clientY);
+  var target = dropTargetAt_(drag.x, drag.y);
   if (!target) {
     return; // dropped nowhere
   }
   applyDrop_(drag, target);
+}
+
+/**
+ * A cancelled drag is not a drop.
+ *
+ * The browser sends pointercancel when it takes the gesture back - the phone
+ * turns, a second finger lands, a system edge-swipe starts. It carries
+ * coordinates like every other pointer event, and this used to run the same
+ * handler as pointerup, which read those coordinates and seated somebody there
+ * as though the coach had let go on purpose. A drop nobody made is the one
+ * mistake this pane must not make, so a cancel puts the rower back and draws
+ * nothing.
+ */
+function onPointerCancel() {
+  if (!DRAG) {
+    return;
+  }
+  endDrag_();
+}
+
+/** Everything a drag leaves behind, whether or not it ended in a drop. */
+function endDrag_() {
+  DRAG = null;
+  stopEdgeScroll_();
+  el('ghost').classList.add('hidden');
+  highlight_(null);
 }
 
 /** The drop target under these coordinates, or null. */
@@ -1020,7 +1182,7 @@ window.addEventListener('DOMContentLoaded', function () {
   document.addEventListener('pointerdown', onPointerDown);
   document.addEventListener('pointermove', onPointerMove);
   document.addEventListener('pointerup', onPointerUp);
-  document.addEventListener('pointercancel', onPointerUp);
+  document.addEventListener('pointercancel', onPointerCancel);
 
   load();
 });

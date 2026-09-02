@@ -331,6 +331,134 @@
     box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
   }
 
+  /* ------------------------------------------------------------------ touch --
+
+     A finger has no second button and no hover, and - the part that actually
+     broke drag and drop on a phone - the browser claims a touch that starts on
+     ordinary content for panning. It fires pointercancel as soon as the finger
+     travels, so every drag died a few pixels in and the rower never moved.
+
+     `touch-action: none` is what hands that gesture back to the page, but on
+     the whole row it would make the pool unscrollable: the list is longer than
+     a phone screen and the rows are nearly all of it, so there would be
+     nothing left to pull on. Hence one small grip per draggable row, and only
+     the grip exempt from panning. Drag from the grip, scroll from anywhere
+     else. A mouse still drags the whole row - onPointerDown checks pointerType
+     for exactly that - because a mouse has no gesture to lose.
+
+     A long-press timer was the alternative and was rejected: it holds the
+     coach still for a third of a second before anything happens, and it still
+     has to guess whether a press that has not moved yet is a drag or the start
+     of a scroll. The grip says which, before the finger lands. */
+  .grip {
+    /* The rows align on the baseline, which the glyph has no business sitting
+       on - it is a texture, not a letter. */
+    align-self: center;
+    margin-left: 6px;
+    padding: 0 4px;
+    color: var(--muted);
+    font-size: 15px;
+    line-height: 1;
+    cursor: grab;
+    touch-action: none;
+  }
+
+  .seat.under .grip {
+    color: var(--bad);
+  }
+
+  /* iOS answers a press-and-hold with the selection magnifier and the share
+     callout, drawn on top of the drag that press just started. */
+  .seat,
+  .pool-item,
+  .grip,
+  .tab,
+  button {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
+
+  /* A fingertip is about 9mm across, so a 24px row is a coin toss between the
+     name above and the name below. Only where the pointer really is coarse -
+     the desktop list stays dense, since a mouse can hit anything. */
+  @media (pointer: coarse) {
+    .seat,
+    .pool-item,
+    .group-item {
+      padding: 9px 8px;
+    }
+
+    .seat + .seat,
+    .pool-item + .pool-item {
+      margin-top: 4px;
+    }
+
+    /* Wide enough to be aimed at rather than hunted for: with the row at
+       ~40px tall this makes the grip roughly a fingertip square. */
+    .grip {
+      padding: 0 12px;
+      font-size: 18px;
+    }
+
+    select,
+    button {
+      padding: 9px 12px;
+    }
+  }
+
+  /* ----------------------------------------------------------------- narrow --
+
+     The columns are 2fr and 1fr, which on a 390px phone leaves the crews about
+     150px: the boat picker truncated to "Göta Lej", and the -, assign and
+     clear buttons stacked one per line down the side of a boat with one seat
+     in it. Below the width where both columns can hold a name they stop being
+     columns - crews first, pool under them, each the full width of the page.
+
+     760px rather than a phone width on purpose: a narrow desktop window and a
+     tablet held upright have the same problem and want the same answer. */
+  @media (max-width: 760px) {
+    body {
+      /* Extra at the bottom so the last pool row is not under the phone's own
+         home indicator, which is where a rower gets dropped from. */
+      padding: 12px 10px 48px;
+    }
+
+    .columns {
+      grid-template-columns: minmax(0, 1fr);
+      gap: 12px;
+    }
+
+    /* Full width and on its own line: the boat name is the one thing in the
+       header that cannot be abbreviated, and it is what the picker is for. */
+    .crew-head select,
+    #session {
+      flex: 1 1 100%;
+    }
+
+    /* The three of them fit across a phone comfortably. They only stacked
+       because the column they were in was 150px wide. */
+    .crew-head button {
+      flex: 1 1 auto;
+    }
+
+    /* Scroll the tabs rather than let them wrap: a second row of tabs pushes
+       every pane down the page for as long as the window is narrow. */
+    .tabs {
+      overflow-x: auto;
+    }
+
+    .tab {
+      flex: 0 0 auto;
+    }
+
+    /* Stacked, the pool is below the crews and is also the drop target for
+       taking somebody out of a boat. 120px of empty space at the bottom of a
+       long page is a big target for nothing; a full boat needs far less. */
+    #pool {
+      min-height: 60px;
+    }
+  }
+
   .hidden {
     display: none;
   }

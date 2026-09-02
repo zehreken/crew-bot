@@ -37,7 +37,7 @@ var INCLUDED_FILES = ['Styles', 'CrewsJs', 'AppJs'];
  * and a stale number here is harmless. It is only ever compared by eye, and
  * the thing it is looking for is a file that arrived half its size.
  */
-var INCLUDED_SIZES = { Styles: 6166, CrewsJs: 14543, AppJs: 24912 };
+var INCLUDED_SIZES = { Styles: 10579, CrewsJs: 14543, AppJs: 37362 };
 
 /**
  * Diagnostic: check that every included partial loads.

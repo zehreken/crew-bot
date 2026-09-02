@@ -262,6 +262,48 @@ what was overridden. Marked, not undone. That holds for a Grupp 0 rower too:
 the solver will never seat one, and a coach who drags one in gets a red seat
 rather than a refusal.
 
+## On a phone
+
+The pane is used at the boathouse, on a phone, so it has to work there.
+
+**Drag a rower by the grip** — the ⠿ at the right-hand end of a name, in the
+pool and in a seat alike. A mouse can still take hold of the row anywhere; a
+finger cannot, and the reason is the whole design. A touch that starts on
+ordinary content belongs to the browser, which pans the page with it and hands
+the page a `pointercancel`, so before this every drag on a phone died a few
+pixels in and the rower never moved. `touch-action: none` takes that gesture
+back — but applied to the row it would take scrolling with it, and the pool on
+a phone is mostly rows, so there would be nothing left to pull the list up by.
+One small grip per row is the exemption, and the two gestures stop competing:
+grip to drag, anywhere else to scroll.
+
+A long-press to start the drag was the alternative. It was rejected because it
+holds the coach still for a third of a second before anything happens, and it
+still has to guess whether a press that has not moved yet is a drag or the
+beginning of a scroll. The grip answers that before the finger lands.
+
+**A drag near the top or bottom edge scrolls the page**, faster the nearer the
+edge. Stacked on a phone the pool is below the crews, so the two ends of a drag
+are routinely not on screen together — and the hand that would scroll to find
+the other end is the hand holding the rower.
+
+**The ghost sits above the fingertip**, not below and to the right of it as it
+does under a mouse. The drop point is the fingertip, and the finger is on top
+of it.
+
+Below 760px the two columns stop being columns: crews first, pool underneath,
+each the full width. At 2fr and 1fr a 390px phone gave the crews about 150px —
+the boat picker truncated to "Göta Lej" and `-` `assign` `clear` stacked one
+per line down the side of a boat with one seat in it. 760px rather than a phone
+width because a narrow desktop window has the same problem and wants the same
+answer. Rows and controls also grow under `@media (pointer: coarse)`, where a
+24px row is a coin toss between the name above and the name below.
+
+A cancelled drag is not a drop. `pointercancel` — the phone turns, a second
+finger lands, a system edge-swipe starts — carries coordinates like any pointer
+event, and used to run the same handler as `pointerup`, which read them and
+seated somebody there as though the coach had let go on purpose.
+
 ## The message
 
 Under the crews, a plain-text box holding the same crews as a message a coach
