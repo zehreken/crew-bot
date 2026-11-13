@@ -181,6 +181,17 @@ function crewsToRows_(result) {
     rows.push(['', '']);
   });
 
+  // Training on the erg instead. A block like a boat's, after the boats and
+  // before the leftovers, and unnumbered because Land has no seats.
+  var land = result.land || [];
+  if (land.length) {
+    rows.push(['Land (' + land.length + ')', '']);
+    land.forEach(function (rower) {
+      rows.push(['  ' + (rower.name || ''), '']);
+    });
+    rows.push(['', '']);
+  }
+
   var leftover = result.unassigned || [];
   if (leftover.length) {
     rows.push(['Not assigned (' + leftover.length + ')', '']);
@@ -219,9 +230,11 @@ function uiSaveCrews(result) {
     seated += (crew.rowers || []).length;
   });
 
+  var landed = (result.land || []).length;
   return (
-    'Wrote ' + (result.crews || []).length + ' boats and ' + seated +
-    ' rowers to the "' + title + '" tab.'
+    'Wrote ' + (result.crews || []).length + ' boats, ' + seated +
+    ' rowers' + (landed ? ' and ' + landed + ' on land' : '') +
+    ' to the "' + title + '" tab.'
   );
 }
 

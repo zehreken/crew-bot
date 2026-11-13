@@ -85,7 +85,7 @@
             }
           });
         });
-        assignment.unassigned.forEach(function (rower) {
+        assignment.unassigned.concat(assignment.land || []).forEach(function (rower) {
           seen.push(rower.id);
         });
         seen.sort();
@@ -272,6 +272,66 @@
           check_(setBoat_(a, 1, inventory[1]) === -1, 'a boat already out is refused for another crew');
           check_(setBoat_(a, 0, inventory[1]) === 0, 'but a crew may re-pick the boat it is already in');
           checkEveryoneOnce_(a, 8, 'nobody was lost or duplicated by any of that');
+        })();
+
+        // --- land: the erg, a boat with no seat limit ------------------------
+        (function () {
+          var a = { crews: [], unassigned: tRowers_(6, 'B'), land: [] };
+          addCrew_(a, tBoat_('Double', '2x', 2, 70, 'B'));
+          seatFromPool_(a, 0, 0, 0);
+          seatFromPool_(a, 0, 0, 1);
+
+          var first = landFromPool_(a, 1);
+          check_(first && first.id === '3', 'pool to land returns the rower who moved');
+          check_(a.land.length === 1 && a.unassigned.length === 3, 'they leave the pool for land');
+          landFromPool_(a, 0);
+          landFromPool_(a, 0);
+          check_(a.land.length === 3, 'land takes as many as are put on it');
+          check_(compareNames_(a.land[0].name, a.land[2].name) < 0, 'and keeps them in name order');
+
+          var off = landFromSeat_(a, 0, 1);
+          check_(off && off.id === '1', 'a rower can go from a seat straight to land');
+          check_(!a.crews[0].seats[1], 'leaving the seat empty, not closed up');
+          check_(a.land.length === 4, 'and land has one more');
+          check_(!landFromSeat_(a, 0, 1), 'an empty seat sends nobody to land');
+
+          var out = seatFromLand_(a, 0, 0, 0);
+          check_(out && out.id === '1', 'a rower can go from land straight into a seat');
+          check_(a.crews[0].seats[0].id === '1', 'they are sitting in it');
+          check_(a.unassigned.length === 2 && a.unassigned[0].id === '0', 'and the rower they displaced goes to the pool, not to land');
+          check_(a.land.length === 3, 'land is one down');
+
+          var back = landToPool_(a, 0);
+          check_(back && a.unassigned.length === 3 && a.land.length === 2, 'land to pool puts them back in the pool');
+          check_(!landToPool_(a, 99) && !landFromPool_(a, 99) && !seatFromLand_(a, 99, 0, 0), 'unknown indexes are ignored');
+          checkEveryoneOnce_(a, 6, 'everyone is still in exactly one place, land included');
+        })();
+
+        (function () {
+          var accepted = tRowers_(9, 'C');
+          var land = [accepted[0], accepted[4]];
+          var a = assign_({ accepted: accepted }, [
+            tBoat_('Four', '4x/4-', 4, 75, ''),
+            tBoat_('Double', '2x', 2, 70, ''),
+          ], land);
+          check_(a.land.length === 2, 'assign leaves land as the coach set it');
+          var seatedIds = [];
+          a.crews.forEach(function (crew) {
+            crew.seats.forEach(function (seat) {
+              if (seat) {
+                seatedIds.push(seat.id);
+              }
+            });
+          });
+          check_(seatedIds.indexOf('0') === -1 && seatedIds.indexOf('4') === -1, 'and seats nobody who is on land');
+          check_(a.unassigned.length === 1, '7 left for 6 seats, so one in the pool');
+          check_(a.unassigned[0].id !== '0' && a.unassigned[0].id !== '4', 'and that one is not a land rower either');
+          checkEveryoneOnce_(a, 9, 'assigning around land loses and duplicates nobody');
+          check_(assign_({ accepted: tRowers_(2, 'C') }, [tBoat_('Double', '2x', 2, 70, '')]).land.length === 0, 'no land given means nobody on land');
+
+          var freshLand = [accepted[1]];
+          var b = assign_({ accepted: accepted }, [], freshLand);
+          check_(b.land !== freshLand, 'the land list handed back is a copy, not the one passed in');
         })();
 
         // --- a boat that cannot be filled must not launch half-crewed --------

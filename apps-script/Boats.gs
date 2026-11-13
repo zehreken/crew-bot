@@ -43,20 +43,56 @@ var NOT_AVAILABLE = ['no', 'false', '0', 'n', 'nej'];
 /**
  * Seats in a boat of this type, or null if the type is unrecognised.
  *
- * The number in the type is the crew size: "8+" is eight rowers (the cox is
- * not a seat we fill), "4x/4-" is four whether it is rigged for sculling or
- * sweep, "C1x" is a coastal single.
+ * The number in the type is the rowers: "4x/4-" is four whether it is rigged
+ * for sculling or sweep, "C1x" is a coastal single. A "+" means the boat is
+ * coxed, and the cox is one more seat to fill - "8+" is nine people. The cox
+ * used to be left out as not a seat we fill, but somebody has to be put in it
+ * on the day, and a crew list without them is not one the coach can send.
+ *
+ * One cox however many plus signs: "4++" is a coxed boat, not one with two
+ * coxes. The cox is the last seat, after the stroke, and is treated like any
+ * other seat - the class rule and the solver do not know it is a cox.
  */
 function seatsForType_(boatType) {
   var normalised = String(boatType || '').trim().toLowerCase();
   if (!normalised) {
     return null;
   }
-  var seats = leadingNumber_(normalised);
-  if (seats !== null) {
-    return seats;
+  var rowers = leadingNumber_(normalised);
+  if (rowers !== null) {
+    return rowers + (normalised.indexOf('+') === -1 ? 0 : 1);
   }
   return TYPE_SEATS[normalised] === undefined ? null : TYPE_SEATS[normalised];
+}
+
+/**
+ * Entry point: check the seat count read from the Boats tab's type column.
+ * Pure - no login, no sheet.
+ */
+function selfTestBoats() {
+  var cases = [
+    ['8+', 9, 'an eight with a cox is nine seats'],
+    ['8x', 8, 'an octuple without one is eight'],
+    ['4++', 5, 'one cox however many plus signs'],
+    ['4x/4-', 4, 'a coxless four is four'],
+    ['2x/2-', 2, 'a double is two'],
+    ['1x', 1, 'a single is one'],
+    ['C1x', 1, 'a coastal single is one'],
+    ['Trimmer', 1, 'a named type comes from TYPE_SEATS'],
+    ['', null, 'blank is unrecognised'],
+  ];
+  var failed = 0;
+  cases.forEach(function (c) {
+    var got = seatsForType_(c[0]);
+    if (got !== c[1]) {
+      failed += 1;
+      console.log('FAIL  %s ("%s" gave %s, wanted %s)', c[2], c[0], got, c[1]);
+    }
+  });
+  console.log('%s checks passed, %s failed.', cases.length - failed, failed);
+  if (failed) {
+    throw new Error(failed + ' boat checks failed. See the log above.');
+  }
 }
 
 /** Blank counts as available - a full column of "yes" is busywork. */

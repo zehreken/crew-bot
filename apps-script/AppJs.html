@@ -100,7 +100,7 @@ function onLoaded(payload) {
 function selectSession(index) {
   APP.sessionIndex = index;
   var s = session_();
-  APP.assignment = { crews: [], unassigned: s ? s.accepted.slice() : [] };
+  APP.assignment = { crews: [], unassigned: s ? s.accepted.slice() : [], land: [] };
   render();
 }
 
@@ -111,13 +111,15 @@ function doAssign() {
   if (!s) {
     return;
   }
-  APP.assignment = assign_(s, APP.payload.boats);
+  // Land survives a re-assign: the coach put those people there on purpose.
+  APP.assignment = assign_(s, APP.payload.boats, land_(APP.assignment));
   var seated = 0;
   APP.assignment.crews.forEach(function (crew) {
     seated += filled_(crew);
   });
   setStatus(
     APP.assignment.crews.length + ' boats out, ' + seated + ' seated, ' +
+    APP.assignment.land.length + ' on land, ' +
     APP.assignment.unassigned.length + ' in the pool.'
   );
   render();
@@ -228,6 +230,9 @@ function doSave() {
           }),
       };
     }),
+    land: land_(APP.assignment).map(function (rower) {
+      return { id: rower.id, name: rower.name };
+    }),
     unassigned: APP.assignment.unassigned.map(function (rower) {
       return { id: rower.id, name: rower.name };
     }),
@@ -265,7 +270,11 @@ function doSave() {
  */
 function messageText_() {
   var s = session_();
-  if (!s || !APP.assignment || !APP.assignment.crews.length) {
+  if (!s || !APP.assignment) {
+    return '';
+  }
+  var land = land_(APP.assignment);
+  if (!APP.assignment.crews.length && !land.length) {
     return '';
   }
 
@@ -287,6 +296,16 @@ function messageText_() {
     });
     lines.push('');
   });
+
+  // After the boats, as one more block: Land is where somebody is training,
+  // the same kind of answer as a boat. Unnumbered - there are no seats.
+  if (land.length) {
+    lines.push('Land');
+    land.forEach(function (rower) {
+      lines.push(rower.name);
+    });
+    lines.push('');
+  }
 
   if (APP.assignment.unassigned.length) {
     // Named, not left out. Somebody who accepted and is not going out should
@@ -431,6 +450,64 @@ function renderCrews() {
   var add = button_('+ boat', 'Put the next free boat on the water', doAddBoat);
   add.id = 'add';
   host.appendChild(add);
+
+  host.appendChild(landBox_());
+}
+
+/**
+ * Land: the erg room, drawn as one more boat with no seat limit.
+ *
+ * Always there, empty or not, because it is a drop target - a box that only
+ * appears once somebody is in it is a box nobody can put the first person in.
+ * The whole box takes the drop, like the pool panel, so there is no seat to
+ * aim at. No level warnings: there is no hull to be below.
+ */
+function landBox_() {
+  var land = land_(APP.assignment);
+
+  var box = document.createElement('div');
+  box.className = 'crew land';
+  box.dataset.dropKind = 'land';
+
+  var head = document.createElement('div');
+  head.className = 'group-head';
+  var title = document.createElement('span');
+  title.textContent = 'Land';
+  head.appendChild(title);
+  var count = document.createElement('span');
+  count.className = 'level';
+  count.textContent = land.length + ' on the erg';
+  head.appendChild(count);
+  box.appendChild(head);
+
+  if (!land.length) {
+    var note = document.createElement('div');
+    note.className = 'empty-note';
+    note.textContent = 'Drop anyone training on land here.';
+    box.appendChild(note);
+  }
+
+  land.forEach(function (rower, landIndex) {
+    var row = document.createElement('div');
+    row.className = 'pool-item';
+    row.dataset.dragKind = 'land';
+    row.dataset.land = String(landIndex);
+
+    var name = document.createElement('span');
+    name.className = 'nm';
+    name.textContent = rower.name;
+    row.appendChild(name);
+
+    var level = document.createElement('span');
+    level.className = 'level';
+    level.textContent = levelLabel_(rower.level);
+    row.appendChild(level);
+
+    row.appendChild(grip_());
+    box.appendChild(row);
+  });
+
+  return box;
 }
 
 function seatRow_(crew, crewIndex, rower, seatIndex) {
@@ -890,6 +967,7 @@ function onPointerDown(event) {
     crew: source.dataset.crew === undefined ? -1 : parseInt(source.dataset.crew, 10),
     seat: source.dataset.seat === undefined ? -1 : parseInt(source.dataset.seat, 10),
     pool: source.dataset.pool === undefined ? -1 : parseInt(source.dataset.pool, 10),
+    land: source.dataset.land === undefined ? -1 : parseInt(source.dataset.land, 10),
     label: label ? label.textContent : '',
     touch: byTouch,
     startX: event.clientX,
@@ -1070,6 +1148,10 @@ function dropTargetAt_(x, y) {
       seat: parseInt(seat.dataset.seat, 10),
     };
   }
+  var land = node.closest('[data-drop-kind="land"]');
+  if (land) {
+    return { kind: 'land', node: land };
+  }
   // The whole pool pane is the target, so a coach can aim at the empty space
   // below the names rather than at one of the rows.
   var pool = node.closest('#pool-panel');
@@ -1093,6 +1175,48 @@ function highlight_(target) {
  */
 function applyDrop_(drag, target) {
   var a = APP.assignment;
+
+  if (target.kind === 'land') {
+    var landed = null;
+    if (drag.kind === 'pool') {
+      landed = landFromPool_(a, drag.pool);
+    } else if (drag.kind === 'seat') {
+      landed = landFromSeat_(a, drag.crew, drag.seat);
+    }
+    if (landed) {
+      setStatus(landed.name + ' is training on land.');
+      render();
+    }
+    return;
+  }
+
+  if (drag.kind === 'land' && target.kind === 'pool') {
+    var back = landToPool_(a, drag.land);
+    if (back) {
+      setStatus(back.name + ' off land and back in the pool.');
+      render();
+    }
+    return;
+  }
+
+  if (drag.kind === 'land' && target.kind === 'seat') {
+    var bumped = seatAt_(a, target.crew, target.seat);
+    var fromLand = seatFromLand_(a, drag.land, target.crew, target.seat);
+    if (!fromLand) {
+      return;
+    }
+    var boat = a.crews[target.crew].boat;
+    var said = fromLand.name + ' off land and into ' + boat.name + ' seat ' + (target.seat + 1);
+    if (bumped) {
+      said += ', ' + bumped.name + ' back to the pool';
+    }
+    if (!mayRow_(fromLand, boat)) {
+      said += '. ' + fromLand.name + ' is below class ' + boat['class'] + ' - allowed, but marked';
+    }
+    setStatus(said + '.');
+    render();
+    return;
+  }
 
   if (drag.kind === 'pool' && target.kind === 'seat') {
     var before = seatAt_(a, target.crew, target.seat);

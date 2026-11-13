@@ -149,14 +149,92 @@ function seatAt_(assignment, crewIndex, seatIndex) {
  * as the middle.
  */
 function intoPool_(assignment, rower) {
+  insertByName_(assignment.unassigned, rower);
+}
+
+function insertByName_(list, rower) {
   var at = 0;
-  while (
-    at < assignment.unassigned.length &&
-    compareNames_(assignment.unassigned[at].name, rower.name) < 0
-  ) {
+  while (at < list.length && compareNames_(list[at].name, rower.name) < 0) {
     at += 1;
   }
-  assignment.unassigned.splice(at, 0, rower);
+  list.splice(at, 0, rower);
+}
+
+// ------------------------------------------------------------------ land --
+//
+// Land is for whoever trains on the erg instead of going out. It behaves like
+// a boat with no seat limit, but it is kept as its own list rather than as a
+// crew with a fake hull, for two reasons. A crew has a boat, and everything
+// that touches crews - the boat picker, fill, clear, setBoat_, the "3/4 seats"
+// note, the solver - would each need telling that this one is different. And
+// Land has no seat order: it is a list of names in name order, like the pool.
+//
+// It is never filled by the solver. A coach puts people there by hand, and
+// anyone on Land is out of the pool and therefore out of reach of assign_ and
+// fillCrew_, which only ever look at the pool.
+//
+// `assignment.land` may be missing on an assignment built before Land existed
+// (the self-tests make some by hand); land_ treats that as empty.
+
+function land_(assignment) {
+  if (!assignment.land) {
+    assignment.land = [];
+  }
+  return assignment.land;
+}
+
+/** Pool -> Land. */
+function landFromPool_(assignment, poolIndex) {
+  if (poolIndex < 0 || poolIndex >= assignment.unassigned.length) {
+    return null;
+  }
+  var rower = assignment.unassigned.splice(poolIndex, 1)[0];
+  insertByName_(land_(assignment), rower);
+  return rower;
+}
+
+/** Seat -> Land. The seat is left empty, as unseat_ leaves it. */
+function landFromSeat_(assignment, crewIndex, seatIndex) {
+  var rower = seatAt_(assignment, crewIndex, seatIndex);
+  if (!rower) {
+    return null;
+  }
+  assignment.crews[crewIndex].seats[seatIndex] = null;
+  insertByName_(land_(assignment), rower);
+  return rower;
+}
+
+/** Land -> pool. */
+function landToPool_(assignment, landIndex) {
+  var land = land_(assignment);
+  if (landIndex < 0 || landIndex >= land.length) {
+    return null;
+  }
+  var rower = land.splice(landIndex, 1)[0];
+  intoPool_(assignment, rower);
+  return rower;
+}
+
+/**
+ * Land -> seat. Whoever was sitting there goes to the pool, not to Land:
+ * that is what dropping on a taken seat does from the pool too, and the
+ * coach decided this rower goes out, not that the other one stays in.
+ */
+function seatFromLand_(assignment, landIndex, crewIndex, seatIndex) {
+  var land = land_(assignment);
+  if (landIndex < 0 || landIndex >= land.length) {
+    return null;
+  }
+  if (!seatExists_(assignment, crewIndex, seatIndex)) {
+    return null;
+  }
+  var incoming = land.splice(landIndex, 1)[0];
+  var sitting = assignment.crews[crewIndex].seats[seatIndex];
+  if (sitting) {
+    intoPool_(assignment, sitting);
+  }
+  assignment.crews[crewIndex].seats[seatIndex] = incoming;
+  return incoming;
 }
 
 /**
@@ -404,9 +482,18 @@ function setBoat_(assignment, crewIndex, boat) {
  * seven in the morning. A coach who disagrees drags it.
  *
  * Every crew this returns is full. Seats only become empty afterwards.
+ *
+ * `land` is whoever the coach has already put on Land. They are left there
+ * and kept out of every boat - Land is the coach's call and the solver does
+ * not overrule it. Optional; none means nobody is on Land.
  */
-function assign_(session, boats) {
-  var result = { crews: [], unassigned: [] };
+function assign_(session, boats, land) {
+  land = land || [];
+  var result = { crews: [], unassigned: [], land: land.slice() };
+  var onLand = {};
+  land.forEach(function (rower) {
+    onLand[rower.id] = true;
+  });
 
   var usable = boats.filter(function (boat) {
     return boat.seats > 0;
@@ -418,7 +505,10 @@ function assign_(session, boats) {
     return compareNames_(a.name, b.name);
   });
 
-  var pool = session.accepted;
+  // Joined on id, never on name - two members can share one.
+  var pool = session.accepted.filter(function (rower) {
+    return !onLand[rower.id];
+  });
   // Flags rather than a shrinking list: a rower one boat cannot take has to
   // still be there, in their original place, for the next boat to look at.
   var seated = pool.map(function () {
